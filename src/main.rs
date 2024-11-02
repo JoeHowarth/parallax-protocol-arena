@@ -5,6 +5,7 @@ use deno_ast::SourceMapOption;
 use deno_core::error::AnyError;
 use deno_core::extension;
 use deno_core::op2;
+use deno_core::JsRuntime;
 use deno_core::ModuleCodeString;
 use deno_core::ModuleLoadResponse;
 use deno_core::ModuleName;
@@ -15,6 +16,7 @@ use eyre::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::rc::Rc;
@@ -41,29 +43,52 @@ pub struct Query {
     key: String,
 }
 
+#[derive(Default)]
 pub struct ScriptManager {
-    pub scripts: DashMap<String, (mpsc::Sender<ToJs>, mpsc::Receiver<FromJs>)>,
+    pub scripts: DashMap<String, ScriptHandle>,
 }
 
-fn main() -> Result<()> {
-    let (tx, rx) = mpsc::channel(10);
-    let (js_tx, mut js_rx) = mpsc::channel(10);
+// pub struct ScriptManagerHandle {}
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&ToJs::Msg("hi".into())).unwrap()
-    );
+pub struct ScriptHandle(pub mpsc::Sender<ToJs>);
 
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        if let Err(error) = runtime.block_on(run_js("./ts/example.ts", rx, js_tx)) {
-            eprintln!("error: {}", error);
+impl ScriptManager {
+    pub fn new() -> ScriptManager {
+        JsRuntime::init_platform(None, false);
+        ScriptManager {
+            scripts: Default::default(),
         }
-    });
+    }
+
+    pub fn run(
+        &self,
+        name: String,
+        path: &'static str,
+    ) -> Result<mpsc::Receiver<FromJs>, AnyError> {
+        let (js_tx, rust_rx) = mpsc::channel(10);
+        let (rust_tx, js_rx) = mpsc::channel(10);
+        std::thread::spawn(move || {
+            let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            if let Err(error) = tokio_runtime.block_on(run_js(path, rust_rx, rust_tx)) {
+                eprintln!("error: {}", error);
+            }
+        });
+        self.scripts.insert(name, ScriptHandle(js_tx));
+        Ok(js_rx)
+    }
+}
+
+fn main() -> Result<(), AnyError> {
+    let manager = ScriptManager::default();
+    let example_script = "./ts/example.ts";
+    let s1 = "s1";
+    let s2 = "s2";
+    let mut js_rx = manager.run(s1.to_string(), example_script)?;
+    let mut js_rx_2 = manager.run(s2.to_string(), example_script)?;
 
     std::thread::spawn(move || {
         while let Some(msg) = js_rx.blocking_recv() {
@@ -71,12 +96,50 @@ fn main() -> Result<()> {
         }
     });
 
+    std::thread::spawn(move || {
+        while let Some(msg) = js_rx_2.blocking_recv() {
+            println!("2 Received msg: {:?}", msg);
+        }
+    });
+
+    let s1_tx = manager.scripts.get_mut(s1).unwrap();
+    let s2_tx = manager.scripts.get_mut(s2).unwrap();
+
     let stdin = std::io::stdin();
     for line in stdin.lines() {
-        tx.blocking_send(ToJs::Msg(line?))?;
+        let line = line?;
+        if line.starts_with("2") {
+            s2_tx.0.blocking_send(ToJs::Msg(line))?;
+        } else {
+            s1_tx.0.blocking_send(ToJs::Msg(line))?;
+        }
     }
 
     Ok(())
+}
+
+async fn run_js(
+    file_path: &str,
+    rx: mpsc::Receiver<ToJs>,
+    tx: mpsc::Sender<FromJs>,
+) -> Result<(), AnyError> {
+    let main_module = deno_core::resolve_path(file_path, &std::env::current_dir()?)?;
+    // let bindings_module =
+    //     deno_core::resolve_path("./bindings/bindings.ts", &std::env::current_dir()?)?;
+    let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
+        module_loader: Some(Rc::new(TsModuleLoader)),
+        extensions: vec![runjs::init_ops_and_esm(rx, tx)],
+        extension_transpiler: Some(Rc::new(|specifier, source| {
+            maybe_transpile_source(specifier, source)
+        })),
+        ..Default::default()
+    });
+
+    // let bindings_id = js_runtime.load_side_es_module(&bindings_module).await?;
+    let mod_id = js_runtime.load_main_es_module(&main_module).await?;
+    let result = js_runtime.mod_evaluate(mod_id);
+    js_runtime.run_event_loop(Default::default()).await?;
+    result.await
 }
 
 extension! {
@@ -102,30 +165,6 @@ extension! {
         state.put(RefCell::new(options.rx));
         state.put(options.tx);
     },
-}
-
-async fn run_js(
-    file_path: &str,
-    rx: mpsc::Receiver<ToJs>,
-    tx: mpsc::Sender<FromJs>,
-) -> Result<(), AnyError> {
-    let main_module = deno_core::resolve_path(file_path, &std::env::current_dir()?)?;
-    let bindings_module =
-        deno_core::resolve_path("./bindings/bindings.ts", &std::env::current_dir()?)?;
-    let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
-        module_loader: Some(Rc::new(TsModuleLoader)),
-        extensions: vec![runjs::init_ops_and_esm(rx, tx)],
-        extension_transpiler: Some(Rc::new(|specifier, source| {
-            maybe_transpile_source(specifier, source)
-        })),
-        ..Default::default()
-    });
-
-    let bindings_id = js_runtime.load_side_es_module(&bindings_module).await?;
-    let mod_id = js_runtime.load_main_es_module(&main_module).await?;
-    let result = js_runtime.mod_evaluate(mod_id);
-    js_runtime.run_event_loop(Default::default()).await?;
-    result.await
 }
 
 #[op2(async)]
