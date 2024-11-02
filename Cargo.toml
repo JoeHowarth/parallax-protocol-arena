@@ -1,0 +1,22 @@
+[package]
+name = "deno-bevy-interop"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[dependencies]
+# bevy = "0.14.2"
+anyhow = "1.0.72"
+serde = "*"
+serde_derive = "*"
+tokio = { version = "1.29.1", features = ["full"] }
+serde_v8 = "0.107.0"
+deno_runtime = "0.184.0"
+deno_core = "0.317.0"
+reqwest = "0.12.9"
+deno_ast = { version = "0.43.3", features = ["transpiling"] }
+eyre = "0.6.12"
+dashmap = "6.1.0"
+serde_json = "1.0.132"
+ts-rs = "10.0.0"
+# syn = "2.0.85"
