@@ -1,8 +1,6 @@
-use agent_runtime::*;
+use deno_bevy_interop::agent_runtime::{ScriptManager, ToJs};
 use deno_core::error::AnyError;
 use eyre::Result;
-
-pub mod agent_runtime;
 
 fn main() -> Result<(), AnyError> {
     let manager = ScriptManager::new();

@@ -855,25 +855,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deno-bevy-interop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dashmap 6.1.0",
- "deno_ast 0.43.3",
- "deno_core 0.317.0",
- "deno_runtime",
- "eyre",
- "reqwest",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_v8 0.107.0",
- "tokio",
- "ts-rs",
-]
-
-[[package]]
 name = "deno_ast"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -953,6 +934,25 @@ dependencies = [
  "thiserror",
  "unicode-width",
  "url",
+]
+
+[[package]]
+name = "deno_bevy_interop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap 6.1.0",
+ "deno_ast 0.43.3",
+ "deno_core 0.317.0",
+ "deno_runtime",
+ "eyre",
+ "reqwest",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_v8 0.107.0",
+ "tokio",
+ "ts-rs",
 ]
 
 [[package]]

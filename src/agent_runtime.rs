@@ -16,7 +16,6 @@ use eyre::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::rc::Rc;

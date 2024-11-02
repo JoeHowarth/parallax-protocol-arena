@@ -1,5 +1,5 @@
 [package]
-name = "deno-bevy-interop"
+name = "deno_bevy_interop"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"
