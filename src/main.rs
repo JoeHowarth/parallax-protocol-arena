@@ -15,16 +15,11 @@ use eyre::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::env;
 use std::path::Path;
-use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::select;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Debug, TS)]
@@ -38,7 +33,6 @@ pub enum FromJs {
 #[ts(export, export_to = "bindings.ts")]
 pub enum ToJs {
     Msg(String),
-    QueryResult(QueryResult),
 }
 
 #[derive(Serialize, Deserialize, Debug, TS)]
@@ -47,104 +41,41 @@ pub struct Query {
     key: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, TS)]
-#[ts(export, export_to = "bindings.ts")]
-pub struct QueryResult {
-    vals: Vec<u32>,
-}
-
-#[derive(Default)]
 pub struct ScriptManager {
-    pub scripts: DashMap<String, ScriptHandle>,
-}
-
-pub struct ScriptHandle {
-    to_js: mpsc::Sender<ToJs>,
-    from_js: mpsc::Receiver<FromJs>,
-    shutdown_tx: oneshot::Sender<()>,
-}
-
-impl ScriptManager {
-    pub fn new() -> Arc<ScriptManager> {
-        Arc::new(Self::default())
-    }
-
-    pub fn new_script(self: &Arc<Self>, label: impl Into<String>, path: impl Into<PathBuf>) {
-        let (to_js, from_rust) = mpsc::channel(10);
-        let (to_rust, from_js) = mpsc::channel(10);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let path = path.into();
-        let manager = self.clone();
-        let label: String = label.into();
-        let label_clone = label.clone();
-
-        // Todo: throw error somewhere if script exits
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
-            if let Err(error) = runtime.block_on(async move {
-                run_js(path, from_rust, to_rust).await
-                // select! {
-                //     res = run_js(path, from_rust, to_rust) => {
-                //         println!("res");
-                //         return res
-                //     }
-                //     _ = shutdown_rx => {
-                //         return Ok(())
-                //     }
-                // }
-            }) {
-                eprintln!("error: {}", error);
-            }
-            dbg!("here");
-            manager.scripts.remove(&label_clone);
-            dbg!("here");
-        });
-
-        self.scripts.insert(
-            label,
-            ScriptHandle {
-                to_js,
-                from_js,
-                shutdown_tx,
-            },
-        );
-    }
+    pub scripts: DashMap<String, (mpsc::Sender<ToJs>, mpsc::Receiver<FromJs>)>,
 }
 
 fn main() -> Result<()> {
-    let scripts = ScriptManager::new();
+    let (tx, rx) = mpsc::channel(10);
+    let (js_tx, mut js_rx) = mpsc::channel(10);
 
-    let first = "first";
-    scripts.new_script(first, "./ts/example.ts");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&ToJs::Msg("hi".into())).unwrap()
+    );
 
-    let handle = {
-        let scripts = scripts.clone();
-        std::thread::spawn(move || {
-            dbg!("top of thread");
-            let from_js = &mut scripts.scripts.get_mut(first).unwrap().from_js;
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
 
-            while let Some(msg) = from_js.blocking_recv() {
-                println!("Received msg: {msg:?}");
-            }
-            println!("from_js closed");
-        })
-    };
+        if let Err(error) = runtime.block_on(run_js("./ts/example.ts", rx, js_tx)) {
+            eprintln!("error: {}", error);
+        }
+    });
 
-    dbg!("here");
-    let to_js = &scripts.scripts.get(first).unwrap().to_js;
+    std::thread::spawn(move || {
+        while let Some(msg) = js_rx.blocking_recv() {
+            println!("Received msg: {:?}", msg);
+        }
+    });
+
     let stdin = std::io::stdin();
     for line in stdin.lines() {
-        dbg!(&line);
-        to_js.blocking_send(ToJs::Msg(line?))?;
+        tx.blocking_send(ToJs::Msg(line?))?;
     }
-    dbg!("here");
 
-    handle.join().unwrap();
-    // stdin_thread.join().unwrap()?;
     Ok(())
 }
 
@@ -158,7 +89,6 @@ extension! {
         op_send,
         op_recv,
         op_sleep,
-        op_call,
     ],
     // config = { mint: usize },
     esm_entry_point = "ext:runjs/runtime.ts",
@@ -175,12 +105,13 @@ extension! {
 }
 
 async fn run_js(
-    file_path: impl AsRef<Path>,
+    file_path: &str,
     rx: mpsc::Receiver<ToJs>,
     tx: mpsc::Sender<FromJs>,
 ) -> Result<(), AnyError> {
     let main_module = deno_core::resolve_path(file_path, &std::env::current_dir()?)?;
-    deno_core::resolve_path("./bindings/bindings.ts", &std::env::current_dir()?)?;
+    let bindings_module =
+        deno_core::resolve_path("./bindings/bindings.ts", &std::env::current_dir()?)?;
     let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
         module_loader: Some(Rc::new(TsModuleLoader)),
         extensions: vec![runjs::init_ops_and_esm(rx, tx)],
@@ -190,6 +121,7 @@ async fn run_js(
         ..Default::default()
     });
 
+    let bindings_id = js_runtime.load_side_es_module(&bindings_module).await?;
     let mod_id = js_runtime.load_main_es_module(&main_module).await?;
     let result = js_runtime.mod_evaluate(mod_id);
     js_runtime.run_event_loop(Default::default()).await?;
@@ -208,18 +140,6 @@ async fn op_send(state: Rc<RefCell<OpState>>, #[serde] msg: FromJs) -> Result<()
     let tx: &mpsc::Sender<FromJs> = state.borrow();
 
     tx.send(msg).await.map_err(Into::into)
-}
-
-#[op2(async)]
-#[serde]
-async fn op_call(state: Rc<RefCell<OpState>>, #[serde] msg: FromJs) -> Result<ToJs, AnyError> {
-    let state = state.borrow();
-    let tx: &mpsc::Sender<(FromJs, oneshot::Sender<ToJs>)> = state.borrow();
-    let (resp_tx, rx) = oneshot::channel();
-
-    tx.send((msg, resp_tx)).await?;
-
-    rx.await.map_err(Into::into)
 }
 
 #[op2(async)]
