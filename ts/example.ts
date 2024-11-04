@@ -5,6 +5,7 @@ import { recv, send } from "./api.ts";
 const msgs: string[] = [];
 
 runjs.sleep(1).then(async () => {
+	console.log("starting loop");
 	while (true) {
 		const joined = msgs.join(", ");
 		await send({

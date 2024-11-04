@@ -6,7 +6,6 @@ resolver = "2"
 
 [dependencies]
 # bevy = "0.14.2"
-anyhow = "1.0.72"
 serde = "*"
 serde_derive = "*"
 tokio = { version = "1.29.1", features = ["full"] }
@@ -15,8 +14,43 @@ deno_runtime = "0.184.0"
 deno_core = "0.317.0"
 reqwest = "0.12.9"
 deno_ast = { version = "0.43.3", features = ["transpiling"] }
-eyre = "0.6.12"
 dashmap = "6.1.0"
 serde_json = "1.0.132"
 ts-rs = "10.0.0"
-# syn = "2.0.85"
+bevy = { version = "0.14.2", features = ["dynamic_linking"] }
+anyhow = "1.0.92"
+log = { version = "*", features = [
+  "max_level_debug",
+  "release_max_level_warn",
+] }
+bevy_pancam = "0.14"
+bevy_vector_shapes = "0.8.2"
+avian2d = "0.1"
+bevy_mod_picking = { version = "0.20", default-features = false, features = [ "backend_bevy_ui", "backend_sprite", "debug", "selection", "highlight" ] }
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Enable more optimization in the release profile at the cost of compile time.
+[profile.release]
+# Compile the entire crate as one unit.
+# Slows compile times, marginal improvements.
+codegen-units = 1
+# Do a second optimization pass over the entire program, including dependencies.
+# Slows compile times, marginal improvements.
+lto = "thin"
+
+# Optimize for size in the wasm-release profile to reduce load times and bandwidth usage on web.
+[profile.wasm-release]
+# Default to release profile values.
+inherits = "release"
+# Optimize with size in mind (also try "z", sometimes it is better).
+# Slightly slows compile times, great improvements to file size and runtime performance.
+opt-level = "s"
+# Strip all debugging information from the binary to slightly reduce file size.
+strip = "debuginfo"

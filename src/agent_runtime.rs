@@ -1,33 +1,37 @@
+use std::{
+    cell::RefCell,
+    env,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
+
+use anyhow::Result;
 use dashmap::DashMap;
-use deno_ast::MediaType;
-use deno_ast::ParseParams;
-use deno_ast::SourceMapOption;
-use deno_core::error::AnyError;
-use deno_core::extension;
-use deno_core::op2;
-use deno_core::JsRuntime;
-use deno_core::ModuleCodeString;
-use deno_core::ModuleLoadResponse;
-use deno_core::ModuleName;
-use deno_core::ModuleSourceCode;
-use deno_core::OpState;
-use deno_core::SourceMapData;
-use eyre::Result;
-use serde::Deserialize;
-use serde::Serialize;
-use std::cell::RefCell;
-use std::env;
-use std::path::Path;
-use std::rc::Rc;
-use std::time::Duration;
-use tokio::sync::mpsc;
+use deno_ast::{MediaType, ParseParams, SourceMapOption};
+use deno_core::{
+    extension,
+    op2,
+    JsRuntime,
+    ModuleCodeString,
+    ModuleLoadResponse,
+    ModuleName,
+    ModuleSourceCode,
+    OpState,
+    SourceMapData,
+};
+use serde::{Deserialize, Serialize};
+pub use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Debug, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub enum FromJs {
     Msg(String),
-    Query(Query),
+    Query(JsQuery),
+    Action,
 }
 
 #[derive(Serialize, Deserialize, Debug, TS)]
@@ -38,60 +42,110 @@ pub enum ToJs {
 
 #[derive(Serialize, Deserialize, Debug, TS)]
 #[ts(export, export_to = "bindings.ts")]
-pub struct Query {
+pub struct JsQuery {
     key: String,
 }
 
-pub struct ScriptManager {
-    scripts: DashMap<String, ScriptHandle>,
+pub struct ScriptManager<ToJs, FromJs> {
+    txs: Arc<DashMap<String, mpsc::Sender<ToJs>>>,
+    rxs: Arc<DashMap<String, mpsc::Receiver<FromJs>>>,
+    new_runtime: mpsc::UnboundedSender<(String, PathBuf, oneshot::Sender<()>)>,
+}
+
+impl Clone for ScriptManager<ToJs, FromJs> {
+    fn clone(&self) -> Self {
+        Self {
+            txs: Arc::clone(&self.txs),
+            rxs: Arc::clone(&self.rxs),
+            new_runtime: self.new_runtime.clone(),
+        }
+    }
 }
 
 // pub struct ScriptManagerHandle {}
 
-pub struct ScriptHandle(pub mpsc::Sender<ToJs>);
+pub type ScriptSender = mpsc::Sender<ToJs>;
+// pub struct ScriptHandle(pub mpsc::Sender<ToJs>);
 
-impl ScriptManager {
-    pub fn new() -> ScriptManager {
-        JsRuntime::init_platform(None, false);
-        ScriptManager {
-            scripts: Default::default(),
+impl ScriptManager<ToJs, FromJs> {
+    pub fn new() -> ScriptManager<ToJs, FromJs> {
+        let (new_runtime, mut rx) = mpsc::unbounded_channel();
+        let manager = ScriptManager {
+            txs: Default::default(),
+            rxs: Default::default(),
+            new_runtime,
+        };
+
+        {
+            let manager = manager.clone();
+            JsRuntime::init_platform(None, false);
+            std::thread::spawn(move || {
+                while let Some((name, file, send_done)) = rx.blocking_recv() {
+                    manager.run_inner(name, file, send_done)
+                }
+            });
         }
+
+        manager
     }
 
-    pub fn run(
+    pub fn run(&self, name: String, path: impl Into<PathBuf>) -> Result<()> {
+        let (send_done, is_done) = oneshot::channel();
+        self.new_runtime.send((name, path.into(), send_done))?;
+        is_done.blocking_recv().map_err(Into::into)
+    }
+
+    fn run_inner(
         &self,
         name: String,
-        path: &'static str,
-    ) -> Result<mpsc::Receiver<FromJs>, AnyError> {
+        path: impl Into<PathBuf>,
+        send_done: oneshot::Sender<()>,
+    ) {
         let (js_tx, rust_rx) = mpsc::channel(10);
         let (rust_tx, js_rx) = mpsc::channel(10);
+        self.txs.insert(name.clone(), js_tx);
+        self.rxs.insert(name, js_rx);
+
+        let path = path.into();
         std::thread::spawn(move || {
             let tokio_runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
 
-            if let Err(error) = tokio_runtime.block_on(run_js(path, rust_rx, rust_tx)) {
+            if let Err(error) =
+                tokio_runtime.block_on(run_js(path, rust_rx, rust_tx))
+            {
                 eprintln!("error: {}", error);
             }
         });
-        self.scripts.insert(name, ScriptHandle(js_tx));
-        Ok(js_rx)
+
+        let _ = send_done.send(());
     }
 
     pub fn sender(&self, name: &str) -> mpsc::Sender<ToJs> {
-        self.scripts.get(name).unwrap().0.clone()
+        self.txs.get(name).unwrap().clone()
+    }
+
+    pub async fn recv(&self, name: &str) -> Option<FromJs> {
+        self.rxs.get_mut(name)?.recv().await
+    }
+
+    pub fn try_recv(&self, name: &str) -> Option<FromJs> {
+        self.rxs.get_mut(name)?.try_recv().ok()
     }
 }
 
 async fn run_js(
-    file_path: &str,
+    file_path: PathBuf,
     rx: mpsc::Receiver<ToJs>,
     tx: mpsc::Sender<FromJs>,
-) -> Result<(), AnyError> {
-    let main_module = deno_core::resolve_path(file_path, &std::env::current_dir()?)?;
+) -> Result<()> {
+    let main_module =
+        deno_core::resolve_path(file_path, &std::env::current_dir()?)?;
     // let bindings_module =
-    //     deno_core::resolve_path("./bindings/bindings.ts", &std::env::current_dir()?)?;
+    //     deno_core::resolve_path("./bindings/bindings.ts",
+    // &std::env::current_dir()?)?;
     let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
         module_loader: Some(Rc::new(TsModuleLoader)),
         extensions: vec![runjs::init_ops_and_esm(rx, tx)],
@@ -101,7 +155,8 @@ async fn run_js(
         ..Default::default()
     });
 
-    // let bindings_id = js_runtime.load_side_es_module(&bindings_module).await?;
+    // let bindings_id =
+    // js_runtime.load_side_es_module(&bindings_module).await?;
     let mod_id = js_runtime.load_main_es_module(&main_module).await?;
     let result = js_runtime.mod_evaluate(mod_id);
     js_runtime.run_event_loop(Default::default()).await?;
@@ -134,13 +189,16 @@ extension! {
 }
 
 #[op2(async)]
-async fn op_sleep(ms: u32) -> Result<(), AnyError> {
+async fn op_sleep(ms: u32) -> Result<()> {
     tokio::time::sleep(Duration::from_millis(ms as u64)).await;
     Ok(())
 }
 
 #[op2(async)]
-async fn op_send(state: Rc<RefCell<OpState>>, #[serde] msg: FromJs) -> Result<(), AnyError> {
+async fn op_send(
+    state: Rc<RefCell<OpState>>,
+    #[serde] msg: FromJs,
+) -> Result<()> {
     let state = state.borrow();
     let tx: &mpsc::Sender<FromJs> = state.borrow();
 
@@ -149,7 +207,7 @@ async fn op_send(state: Rc<RefCell<OpState>>, #[serde] msg: FromJs) -> Result<()
 
 #[op2(async)]
 #[serde]
-async fn op_recv(state: Rc<RefCell<OpState>>) -> Result<ToJs, AnyError> {
+async fn op_recv(state: Rc<RefCell<OpState>>) -> Result<ToJs> {
     let state = state.borrow();
     let rx: &RefCell<mpsc::Receiver<ToJs>> = state.borrow();
     let mut rx = rx.borrow_mut();
@@ -162,26 +220,29 @@ async fn op_recv(state: Rc<RefCell<OpState>>) -> Result<ToJs, AnyError> {
 
 #[op2(async)]
 #[string]
-async fn op_read_file(#[string] path: String) -> Result<String, AnyError> {
+async fn op_read_file(#[string] path: String) -> Result<String> {
     let contents = tokio::fs::read_to_string(path).await?;
     Ok(contents)
 }
 
 #[op2(async)]
-async fn op_write_file(#[string] path: String, #[string] contents: String) -> Result<(), AnyError> {
+async fn op_write_file(
+    #[string] path: String,
+    #[string] contents: String,
+) -> Result<()> {
     tokio::fs::write(path, contents).await?;
     Ok(())
 }
 
 #[op2(fast)]
-fn op_remove_file(#[string] path: String) -> Result<(), AnyError> {
+fn op_remove_file(#[string] path: String) -> Result<()> {
     std::fs::remove_file(path)?;
     Ok(())
 }
 
 #[op2(async)]
 #[string]
-async fn op_fetch(#[string] url: String) -> Result<String, AnyError> {
+async fn op_fetch(#[string] url: String) -> Result<String> {
     let body = reqwest::get(url).await?.text().await?;
     Ok(body)
 }
@@ -210,21 +271,24 @@ impl deno_core::ModuleLoader for TsModuleLoader {
             let path = module_specifier.to_file_path().unwrap();
 
             let media_type = MediaType::from_path(&path);
-            let (module_type, should_transpile) = match MediaType::from_path(&path) {
-                MediaType::JavaScript | MediaType::Mjs | MediaType::Cjs => {
-                    (deno_core::ModuleType::JavaScript, false)
-                }
-                MediaType::Jsx => (deno_core::ModuleType::JavaScript, true),
-                MediaType::TypeScript
-                | MediaType::Mts
-                | MediaType::Cts
-                | MediaType::Dts
-                | MediaType::Dmts
-                | MediaType::Dcts
-                | MediaType::Tsx => (deno_core::ModuleType::JavaScript, true),
-                MediaType::Json => (deno_core::ModuleType::Json, false),
-                _ => panic!("Unknown extension {:?}", path.extension()),
-            };
+            let (module_type, should_transpile) =
+                match MediaType::from_path(&path) {
+                    MediaType::JavaScript | MediaType::Mjs | MediaType::Cjs => {
+                        (deno_core::ModuleType::JavaScript, false)
+                    }
+                    MediaType::Jsx => (deno_core::ModuleType::JavaScript, true),
+                    MediaType::TypeScript
+                    | MediaType::Mts
+                    | MediaType::Cts
+                    | MediaType::Dts
+                    | MediaType::Dmts
+                    | MediaType::Dcts
+                    | MediaType::Tsx => {
+                        (deno_core::ModuleType::JavaScript, true)
+                    }
+                    MediaType::Json => (deno_core::ModuleType::Json, false),
+                    _ => panic!("Unknown extension {:?}", path.extension()),
+                };
 
             let code = std::fs::read_to_string(&path)?;
             let code = if should_transpile {
@@ -265,8 +329,9 @@ impl deno_core::ModuleLoader for TsModuleLoader {
 pub fn maybe_transpile_source(
     name: ModuleName,
     source: ModuleCodeString,
-) -> Result<(ModuleCodeString, Option<SourceMapData>), AnyError> {
-    // Always transpile `node:` built-in modules, since they might be TypeScript.
+) -> Result<(ModuleCodeString, Option<SourceMapData>)> {
+    // Always transpile `node:` built-in modules, since they might be
+    // TypeScript.
     let media_type = if name.starts_with("node:") {
         MediaType::TypeScript
     } else {
@@ -278,7 +343,8 @@ pub fn maybe_transpile_source(
         MediaType::JavaScript => return Ok((source, None)),
         MediaType::Mjs => return Ok((source, None)),
         _ => panic!(
-            "Unsupported media type for snapshotting {media_type:?} for file {}",
+            "Unsupported media type for snapshotting {media_type:?} for file \
+             {}",
             name
         ),
     }
@@ -294,7 +360,8 @@ pub fn maybe_transpile_source(
     let transpiled_source = parsed
         .transpile(
             &deno_ast::TranspileOptions {
-                imports_not_used_as_values: deno_ast::ImportsNotUsedAsValues::Remove,
+                imports_not_used_as_values:
+                    deno_ast::ImportsNotUsedAsValues::Remove,
                 ..Default::default()
             },
             &deno_ast::TranspileModuleOptions::default(),

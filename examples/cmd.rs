@@ -1,8 +1,9 @@
-use eyre::Result;
 use std::{
     io::{BufRead, BufReader, LineWriter, Write},
     net::TcpStream,
 };
+
+use anyhow::Result;
 
 fn main() -> Result<()> {
     println!("Attempting to connect");

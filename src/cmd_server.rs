@@ -1,8 +1,10 @@
 use std::str::FromStr;
 
-use eyre::{bail, Result};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use anyhow::{bail, Result};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+};
 
 use crate::agent_runtime::ToJs;
 
@@ -66,7 +68,7 @@ impl ToString for Resp {
 }
 
 impl FromStr for Cmd {
-    type Err = eyre::Error;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if let Some(_) = s.strip_prefix("ping") {
