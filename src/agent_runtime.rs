@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
+use bevy::prelude::Resource;
 use dashmap::DashMap;
 use deno_ast::{MediaType, ParseParams, SourceMapOption};
 use deno_core::{
@@ -46,13 +47,14 @@ pub struct JsQuery {
     key: String,
 }
 
-pub struct ScriptManager<ToJs, FromJs> {
+#[derive(Resource)]
+pub struct ScriptManager {
     txs: Arc<DashMap<String, mpsc::Sender<ToJs>>>,
     rxs: Arc<DashMap<String, mpsc::Receiver<FromJs>>>,
     new_runtime: mpsc::UnboundedSender<(String, PathBuf, oneshot::Sender<()>)>,
 }
 
-impl Clone for ScriptManager<ToJs, FromJs> {
+impl Clone for ScriptManager {
     fn clone(&self) -> Self {
         Self {
             txs: Arc::clone(&self.txs),
@@ -67,8 +69,30 @@ impl Clone for ScriptManager<ToJs, FromJs> {
 pub type ScriptSender = mpsc::Sender<ToJs>;
 // pub struct ScriptHandle(pub mpsc::Sender<ToJs>);
 
-impl ScriptManager<ToJs, FromJs> {
-    pub fn new() -> ScriptManager<ToJs, FromJs> {
+impl ScriptManager {
+    pub fn try_send(&self, name: &str, val: ToJs) -> Option<()> {
+        self.txs.get(name).unwrap().try_send(val).ok()
+    }
+
+    pub fn sender(&self, name: &str) -> mpsc::Sender<ToJs> {
+        self.txs.get(name).unwrap().clone()
+    }
+
+    pub async fn recv(&self, name: &str) -> Option<FromJs> {
+        self.rxs.get_mut(name)?.recv().await
+    }
+
+    pub fn try_recv(&self, name: &str) -> Option<FromJs> {
+        self.rxs.get_mut(name)?.try_recv().ok()
+    }
+
+    pub fn run(&self, name: String, path: impl Into<PathBuf>) -> Result<()> {
+        let (send_done, is_done) = oneshot::channel();
+        self.new_runtime.send((name, path.into(), send_done))?;
+        is_done.blocking_recv().map_err(Into::into)
+    }
+
+    pub fn new() -> ScriptManager {
         let (new_runtime, mut rx) = mpsc::unbounded_channel();
         let manager = ScriptManager {
             txs: Default::default(),
@@ -87,12 +111,6 @@ impl ScriptManager<ToJs, FromJs> {
         }
 
         manager
-    }
-
-    pub fn run(&self, name: String, path: impl Into<PathBuf>) -> Result<()> {
-        let (send_done, is_done) = oneshot::channel();
-        self.new_runtime.send((name, path.into(), send_done))?;
-        is_done.blocking_recv().map_err(Into::into)
     }
 
     fn run_inner(
@@ -121,18 +139,6 @@ impl ScriptManager<ToJs, FromJs> {
         });
 
         let _ = send_done.send(());
-    }
-
-    pub fn sender(&self, name: &str) -> mpsc::Sender<ToJs> {
-        self.txs.get(name).unwrap().clone()
-    }
-
-    pub async fn recv(&self, name: &str) -> Option<FromJs> {
-        self.rxs.get_mut(name)?.recv().await
-    }
-
-    pub fn try_recv(&self, name: &str) -> Option<FromJs> {
-        self.rxs.get_mut(name)?.try_recv().ok()
     }
 }
 

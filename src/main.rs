@@ -11,13 +11,16 @@ use bevy_mod_picking::{
     PickableBundle,
 };
 use bevy_vector_shapes::prelude::*;
-use deno_bevy_interop::{agent_runtime::*, missile_bot::*};
+use deno_bevy_interop::{
+    agent_runtime::{FromJs, ToJs, *},
+    missile_bot::*,
+};
 
 fn main() -> Result<()> {
     let scripts = ScriptManager::new();
     let missile_bot_script = "MissileBotScript";
-    let rx =
-        scripts.run(missile_bot_script.to_owned(), "./ts/missile_bot.ts")?;
+
+    scripts.run(missile_bot_script.to_owned(), "./ts/missile_bot.ts")?;
 
     App::new()
         .add_plugins((
@@ -27,24 +30,20 @@ fn main() -> Result<()> {
             PhysicsPlugins::default(),
             DefaultPickingPlugins,
         ))
-        .insert_resource(JsRx(rx))
-        .insert_resource(JsTx(scripts.sender(&missile_bot_script)))
+        .insert_resource(scripts)
         .insert_resource(Gravity::ZERO)
         .insert_resource(Selected::<MissleBot>(None))
         .insert_resource(DebugPickingMode::Normal)
         .add_event::<FireMissile>()
         .add_systems(Startup, setup)
+        .add_systems(PreUpdate, handle_scripts)
         .add_systems(Update, (handle_fire_missile, update_missiles))
         .run();
 
     Ok(())
 }
 
-#[derive(Resource, Deref, DerefMut)]
-pub struct JsRx(pub mpsc::Receiver<FromJs>);
-
-#[derive(Resource, Deref)]
-pub struct JsTx(pub mpsc::Sender<ToJs>);
+pub fn handle_scripts(scripts: ResMut<ScriptManager>) {}
 
 #[derive(Resource)]
 pub struct Selected<Comp>(pub Option<(Entity, Comp)>);
