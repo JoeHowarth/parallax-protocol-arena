@@ -1,0 +1,10 @@
+{
+    "diagnostics.disable": [
+        "lowercase-global"
+    ],
+    "diagnostics.globals": [
+        "world",
+        "entity",
+        "missile"
+    ]
+}

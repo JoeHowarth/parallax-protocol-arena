@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use anyhow::Result;
 use avian2d::prelude::*;
 use bevy::prelude::*;
@@ -8,15 +10,93 @@ use bevy_mod_picking::{
     DefaultPickingPlugins,
     PickableBundle,
 };
+use bevy_mod_scripting::{
+    api::{prelude::*, providers::bevy_ecs::LuaEntity},
+    prelude::*,
+};
 use bevy_vector_shapes::prelude::*;
 
-use crate::agent_runtime::*;
+use crate::Health;
 
-pub struct Name(pub String);
+pub struct MissileBotPlugin;
+
+impl Plugin for MissileBotPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_type::<MissileBot>()
+            .add_event::<FireMissile>()
+            .add_systems(
+                Update,
+                (
+                    handle_fire_missile,
+                    update_missiles,
+                    handle_missile_collision,
+                ),
+            )
+            .add_api_provider::<LuaScriptHost<()>>(Box::new(MissileBotPlugin));
+    }
+}
+
+impl APIProvider for MissileBotPlugin {
+    type APITarget = Mutex<Lua>;
+    type DocTarget = LuaDocFragment;
+    type ScriptContext = Mutex<Lua>;
+
+    fn attach_api(
+        &mut self,
+        ctx: &mut Self::APITarget,
+    ) -> Result<(), ScriptError> {
+        // callbacks can receive any `ToLuaMulti` arguments, here '()' and
+        // return any `FromLuaMulti` arguments, here a `usize`
+        // check the Rlua documentation for more details
+
+        let ctx = ctx.get_mut().unwrap();
+
+        let table = ctx.create_table().map_err(ScriptError::new_other)?;
+        table
+            .set(
+                "fire",
+                ctx.create_function(
+                    |ctx, (_, from, target): (Value, Value, Value)| {
+                        // retrieve the world pointer
+                        let world = ctx.get_world()?;
+                        let mut world = world.write();
+
+                        let from: Entity =
+                            Entity::from_lua_proxy(from, ctx).unwrap();
+                        let target: Entity =
+                            Entity::from_lua_proxy(target, ctx).unwrap();
+
+                        let mut events: Mut<Events<FireMissile>> =
+                            world.get_resource_mut().unwrap();
+                        events.send(FireMissile { from, target });
+
+                        // return something
+                        Ok(())
+                    },
+                )
+                .map_err(ScriptError::new_other)?,
+            )
+            .map_err(ScriptError::new_other)?;
+
+        ctx.globals()
+            .set("missile", table)
+            .map_err(ScriptError::new_other)?;
+
+        Ok(())
+    }
+
+    fn setup_script(
+        &mut self,
+        _: &ScriptData,
+        _: &mut Self::ScriptContext,
+    ) -> Result<(), ScriptError> {
+        Ok(())
+    }
+}
 
 pub enum Action {
     MoveTo(Vec2),
-    FireMissile(Name),
+    FireMissile(Entity),
 }
 
 pub fn missile_bot_bundle(
@@ -26,8 +106,13 @@ pub fn missile_bot_bundle(
     let radius = 15.;
     let px = 32.;
     let color = Color::srgb(1.0, 0.0, 0.1);
+    let script_path = "scripts/missile_bot.lua".to_string();
+    let handle = asset_server.load(&script_path);
     (
-        MissleBot,
+        MissileBot,
+        ScriptCollection::<LuaFile> {
+            scripts: vec![Script::new(script_path, handle)],
+        },
         circle_bundle(radius, px, color, loc, asset_server),
     )
 }
@@ -58,7 +143,25 @@ pub fn circle_bundle(
     )
 }
 
+pub fn handle_missile_collision(
+    mut commands: Commands,
+    missiles: Query<(Entity, &CollidingEntities, &Missile)>,
+    mut health: Query<&mut Health, Without<Missile>>,
+) {
+    for (e, colliding_entities, missile) in missiles.iter() {
+        if colliding_entities.0.len() > 0 {
+            dbg!(&colliding_entities.0);
+        }
+        if colliding_entities.0.contains(&missile.target) {
+            info!("Collision");
+            commands.entity(e).despawn();
+            health.get_mut(missile.target).unwrap().0 -= 10.;
+        }
+    }
+}
+
 pub fn update_missiles(
+    mut commands: Commands,
     missiles: Query<(Entity, &Missile)>,
     mut p: ParamSet<(
         Query<&Transform>,
@@ -72,7 +175,14 @@ pub fn update_missiles(
 
     for (e, missile) in missiles.iter() {
         let missile_trans = p.p0().get(e).unwrap().translation;
-        let target_trans = p.p0().get(missile.target).unwrap().translation;
+        let target_trans = {
+            let p0 = p.p0();
+            let Ok(target_trans) = p0.get(missile.target) else {
+                commands.entity(e).despawn();
+                continue;
+            };
+            target_trans.translation
+        };
 
         painter.set_translation(missile_trans);
 
@@ -102,7 +212,7 @@ pub fn update_missiles(
 
             painter.set_color(bevy::color::palettes::basic::FUCHSIA);
             painter.line(Vec3::ZERO, dx * 30.);
-            println!("dx: {dx}, dir: {dir}");
+            // println!("dx: {dx}, dir: {dir}");
             painter.triangle(
                 Vec2::new(1., 1.),
                 Vec2::new(2., 2.),
@@ -115,7 +225,7 @@ pub fn update_missiles(
 
             painter.set_color(bevy::color::palettes::basic::PURPLE);
             painter.line(Vec3::ZERO, dx * 30.);
-            println!("dx: {dx}, dir: {dir}");
+            // println!("dx: {dx}, dir: {dir}");
 
             dx
         };
@@ -159,7 +269,7 @@ pub struct Missile {
 }
 
 #[derive(Component, Reflect)]
-pub struct MissleBot;
+pub struct MissileBot;
 
 ////////// Utils
 

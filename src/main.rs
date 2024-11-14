@@ -10,18 +10,11 @@ use bevy_mod_picking::{
     DefaultPickingPlugins,
     PickableBundle,
 };
+use bevy_mod_scripting::prelude::*;
 use bevy_vector_shapes::prelude::*;
-use deno_bevy_interop::{
-    agent_runtime::{FromJs, ToJs, *},
-    missile_bot::*,
-};
+use lua_bevy_interop::*;
 
 fn main() -> Result<()> {
-    let scripts = ScriptManager::new();
-    let missile_bot_script = "MissileBotScript";
-
-    scripts.run(missile_bot_script.to_owned(), "./ts/missile_bot.ts")?;
-
     App::new()
         .add_plugins((
             DefaultPlugins,
@@ -29,21 +22,26 @@ fn main() -> Result<()> {
             Shape2dPlugin::default(),
             PhysicsPlugins::default(),
             DefaultPickingPlugins,
+            ScriptingPlugin,
         ))
-        .insert_resource(scripts)
+        .add_script_host::<LuaScriptHost<()>>(PostUpdate)
+        .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaCoreBevyAPIProvider))
+        .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaBevyAPIProvider))
+        .add_plugins(MissileBotPlugin)
+        // .add_api_provider::<LuaScriptHost<()>>(Box::new(LifeAPI))
         .insert_resource(Gravity::ZERO)
-        .insert_resource(Selected::<MissleBot>(None))
+        .insert_resource(Selected::<MissileBot>(None))
         .insert_resource(DebugPickingMode::Normal)
-        .add_event::<FireMissile>()
+        // .insert_resource(Time::<Fixed>::from_seconds(0.250))
+        .register_type::<PlasmaBot>()
         .add_systems(Startup, setup)
-        .add_systems(PreUpdate, handle_scripts)
-        .add_systems(Update, (handle_fire_missile, update_missiles))
+        .add_systems(FixedUpdate, send_on_update)
+        .add_script_handler::<LuaScriptHost<()>, 0, 0>(FixedPostUpdate)
+        .add_systems(Update, health_despawn)
         .run();
 
     Ok(())
 }
-
-pub fn handle_scripts(scripts: ResMut<ScriptManager>) {}
 
 #[derive(Resource)]
 pub struct Selected<Comp>(pub Option<(Entity, Comp)>);
@@ -63,7 +61,7 @@ fn setup(
             SpatialBundle::default(),
             On::<Pointer<Click>>::run(
                 |e: Listener<Pointer<Click>>,
-                 selected: ResMut<Selected<MissleBot>>,
+                 selected: ResMut<Selected<MissileBot>>,
                  mut tx: EventWriter<FireMissile>| {
                     let Some((missile_bot_e, _)) = &selected.0 else {
                         return;
@@ -97,8 +95,8 @@ fn setup(
             SpatialBundle::default(),
             On::<Pointer<Click>>::run(
                 |listener: Listener<Pointer<Click>>,
-                 mut selected: ResMut<Selected<MissleBot>>| {
-                    selected.0 = Some((listener.target(), MissleBot));
+                 mut selected: ResMut<Selected<MissileBot>>| {
+                    selected.0 = Some((listener.target(), MissileBot));
                 },
             ),
         ))
@@ -114,15 +112,25 @@ fn setup(
     painter.set_2d();
 }
 
+/// Sends events allowing scripts to drive update logic
+pub fn send_on_update(mut events: PriorityEventWriter<LuaEvent<()>>) {
+    events.send(
+        LuaEvent {
+            hook_name: "on_update".to_owned(),
+            args: (),
+            recipients: Recipients::All,
+        },
+        0,
+    )
+}
+
 pub fn plasma_bot_bundle(asset_server: &AssetServer, loc: Vec2) -> impl Bundle {
     let radius = 10.;
     let px = 32.;
     let color = Color::srgb(0.0, 1.0, 0.1);
     (
         PlasmaBot,
+        Health(20.),
         circle_bundle(radius, px, color, loc, asset_server),
     )
 }
-
-#[derive(Component, Reflect)]
-pub struct PlasmaBot;

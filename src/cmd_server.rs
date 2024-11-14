@@ -6,8 +6,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::agent_runtime::ToJs;
-
 pub async fn cmd_server() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:1234").await?;
 
@@ -50,7 +48,7 @@ async fn listen_to_cmds(tcp: TcpStream) -> Result<()> {
 pub enum Cmd {
     Ping,
     Msg(String),
-    SendToScript { script_label: String, msg: ToJs },
+    SendToScript { script_label: String, msg: String },
 }
 
 pub enum Resp {
@@ -85,7 +83,7 @@ impl FromStr for Cmd {
                 let msg = msg.trim().to_owned();
                 return Ok(Cmd::SendToScript {
                     script_label: label.trim().to_owned(),
-                    msg: ToJs::Msg(msg.trim().to_owned()),
+                    msg: msg.trim().to_owned(),
                 });
             }
         }

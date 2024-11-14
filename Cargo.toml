@@ -1,5 +1,5 @@
 [package]
-name = "deno_bevy_interop"
+name = "lua_bevy_interop"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"
@@ -10,13 +10,8 @@ serde = "*"
 serde_derive = "*"
 tokio = { version = "1.29.1", features = ["full"] }
 serde_v8 = "0.107.0"
-deno_runtime = "0.184.0"
-deno_core = "0.317.0"
 reqwest = "0.12.9"
-deno_ast = { version = "0.43.3", features = ["transpiling"] }
-dashmap = "6.1.0"
 serde_json = "1.0.132"
-ts-rs = "10.0.0"
 bevy = { version = "0.14.2", features = ["dynamic_linking"] }
 anyhow = "1.0.92"
 log = { version = "*", features = [
@@ -27,6 +22,7 @@ bevy_pancam = "0.14"
 bevy_vector_shapes = "0.8.2"
 avian2d = "0.1"
 bevy_mod_picking = { version = "0.20", default-features = false, features = [ "backend_bevy_ui", "backend_sprite", "debug", "selection", "highlight" ] }
+bevy_mod_scripting = { version = "0.7.1", features = ["bevy_script_api", "lua_script_api", "luajit52"] }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
