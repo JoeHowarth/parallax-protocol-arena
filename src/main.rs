@@ -1,8 +1,10 @@
 #![allow(unused_imports)]
 
+use std::time::Duration;
+
 use anyhow::Result;
 use avian2d::prelude::*;
-use bevy::prelude::*;
+use bevy::{prelude::*, time::common_conditions::on_timer};
 use bevy_mod_picking::{
     debug::DebugPickingMode,
     events::Click,
@@ -12,7 +14,8 @@ use bevy_mod_picking::{
 };
 use bevy_mod_scripting::prelude::*;
 use bevy_vector_shapes::prelude::*;
-use lua_bevy_interop::*;
+use lua_bevy_interop::{sensor::SensorPlugin, *};
+use sensor::CraftKind;
 
 fn main() -> Result<()> {
     App::new()
@@ -27,7 +30,7 @@ fn main() -> Result<()> {
         .add_script_host::<LuaScriptHost<()>>(PostUpdate)
         .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaCoreBevyAPIProvider))
         .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaBevyAPIProvider))
-        .add_plugins(MissileBotPlugin)
+        .add_plugins((MissileBotPlugin, SensorPlugin))
         // .add_api_provider::<LuaScriptHost<()>>(Box::new(LifeAPI))
         .insert_resource(Gravity::ZERO)
         .insert_resource(Selected::<MissileBot>(None))
@@ -35,7 +38,10 @@ fn main() -> Result<()> {
         // .insert_resource(Time::<Fixed>::from_seconds(0.250))
         .register_type::<PlasmaBot>()
         .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, send_on_update)
+        .add_systems(
+            FixedUpdate,
+            send_on_update.run_if(on_timer(Duration::from_millis(500))),
+        )
         .add_script_handler::<LuaScriptHost<()>, 0, 0>(FixedPostUpdate)
         .add_systems(Update, health_despawn)
         .run();
@@ -131,6 +137,7 @@ pub fn plasma_bot_bundle(asset_server: &AssetServer, loc: Vec2) -> impl Bundle {
     (
         PlasmaBot,
         Health(20.),
+        CraftKind::PlasmaBot,
         circle_bundle(radius, px, color, loc, asset_server),
     )
 }

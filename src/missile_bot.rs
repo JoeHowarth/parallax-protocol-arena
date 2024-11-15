@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{sync::Mutex, time::Instant};
 
 use anyhow::Result;
 use avian2d::prelude::*;
@@ -16,7 +16,7 @@ use bevy_mod_scripting::{
 };
 use bevy_vector_shapes::prelude::*;
 
-use crate::Health;
+use crate::{sensor::CraftKind, Health};
 
 pub struct MissileBotPlugin;
 
@@ -49,37 +49,58 @@ impl APIProvider for MissileBotPlugin {
         // return any `FromLuaMulti` arguments, here a `usize`
         // check the Rlua documentation for more details
 
-        let ctx = ctx.get_mut().unwrap();
+        let lua = ctx.get_mut().unwrap();
 
-        let table = ctx.create_table().map_err(ScriptError::new_other)?;
+        let table = lua.create_table().map_err(ScriptError::new_other)?;
+        table
+            .set(
+                "can_fire",
+                lua.create_function(|lua, _: Value| {
+                    let world = lua.get_world()?;
+                    let world = world.read();
+
+                    let from =
+                        lua.globals().get::<_, LuaEntity>("entity")?.inner()?;
+                    can_fire(&world, from)
+                })
+                .map_err(ScriptError::new_other)?,
+            )
+            .map_err(ScriptError::new_other)?;
         table
             .set(
                 "fire",
-                ctx.create_function(
-                    |ctx, (_, from, target): (Value, Value, Value)| {
+                lua.create_function(
+                    |lua, (this, target): (LuaTable, LuaEntity)| {
                         // retrieve the world pointer
-                        let world = ctx.get_world()?;
+                        let world = lua.get_world()?;
                         let mut world = world.write();
 
-                        let from: Entity =
-                            Entity::from_lua_proxy(from, ctx).unwrap();
-                        let target: Entity =
-                            Entity::from_lua_proxy(target, ctx).unwrap();
+                        let from = lua
+                            .globals()
+                            .get::<_, LuaEntity>("entity")?
+                            .inner()?;
+
+                        // check if we can fire
+                        if !can_fire(&world, from)? {
+                            return Ok(false);
+                        }
 
                         let mut events: Mut<Events<FireMissile>> =
                             world.get_resource_mut().unwrap();
-                        events.send(FireMissile { from, target });
+                        events.send(FireMissile {
+                            from,
+                            target: target.inner()?,
+                        });
 
-                        // return something
-                        Ok(())
+                        Ok(true)
                     },
                 )
                 .map_err(ScriptError::new_other)?,
             )
             .map_err(ScriptError::new_other)?;
 
-        ctx.globals()
-            .set("missile", table)
+        lua.globals()
+            .set("missiles", table)
             .map_err(ScriptError::new_other)?;
 
         Ok(())
@@ -94,10 +115,15 @@ impl APIProvider for MissileBotPlugin {
     }
 }
 
-pub enum Action {
-    MoveTo(Vec2),
-    FireMissile(Entity),
+fn can_fire(world: &World, from: Entity) -> mlua::Result<bool> {
+    if let Some(last_fired) = world.entity(from).get::<MissileLastFiredTime>() {
+        let now = world.resource::<Time<Virtual>>();
+        return Ok(dbg!(dbg!(last_fired.0) + 5. < now.elapsed_seconds_f64()));
+    }
+    Ok(dbg!(true))
 }
+
+pub struct MissileBotState {}
 
 pub fn missile_bot_bundle(
     asset_server: &AssetServer,
@@ -113,6 +139,7 @@ pub fn missile_bot_bundle(
         ScriptCollection::<LuaFile> {
             scripts: vec![Script::new(script_path, handle)],
         },
+        CraftKind::MissileBot,
         circle_bundle(radius, px, color, loc, asset_server),
     )
 }
@@ -178,6 +205,7 @@ pub fn update_missiles(
         let target_trans = {
             let p0 = p.p0();
             let Ok(target_trans) = p0.get(missile.target) else {
+                // if target is not there anymore, despawn missile
                 commands.entity(e).despawn();
                 continue;
             };
@@ -239,6 +267,7 @@ pub fn handle_fire_missile(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     locs: Query<&Transform>,
+    now: Res<Time<Virtual>>,
 ) {
     for FireMissile { from, target } in reader.read() {
         let starting_loc = locs.get(*from).unwrap();
@@ -250,12 +279,20 @@ pub fn handle_fire_missile(
             .xy();
         let loc = starting_loc.translation.xy() + dir * 5.;
 
+        commands
+            .entity(*from)
+            .insert(dbg!(MissileLastFiredTime(now.elapsed_seconds_f64())));
+
         commands.spawn((
             Missile { target: *target },
+            CraftKind::Missile,
             circle_bundle(1., 32., Color::srgb(0., 1., 1.), loc, &asset_server),
         ));
     }
 }
+
+#[derive(Component, Reflect, Debug)]
+pub struct MissileLastFiredTime(pub f64);
 
 #[derive(Event)]
 pub struct FireMissile {

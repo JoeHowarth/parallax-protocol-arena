@@ -1,7 +1,6 @@
 local MissileBot
 local PlasmaBot
 local Transform
-local has_fired = false
 
 local function define_components()
 	if MissileBot == nil then
@@ -20,22 +19,38 @@ end
 
 function on_update()
 	define_components()
-	if not has_fired then
-		local min = 10000000000
-		local min_ent = nil
-		local our_transform = world:get_component(entity, Transform)
-		local our_pos = our_transform.translation
 
-		for other_entity, trans in world:query(Transform):with(PlasmaBot):iter() do
-			local dist = our_pos:distance(trans.translation)
-			if dist < min then
-				min_ent = other_entity
-				min = dist
+	if missiles:can_fire() then
+		local contacts = sensors:contacts()
+		for i, contact in ipairs(contacts) do
+			print("contact ", i, contact.kind, contact.pos, contact.vel)
+			if contact.kind == CraftKind.PlasmaBot then
+				print("firing...")
+				missiles:fire(contact.entity)
+				return
 			end
 		end
-
-		print("closest: ", min_ent, min)
-		missile:fire(entity, min_ent)
-		has_fired = true
 	end
 end
+
+-- function on_update()
+-- 	define_components()
+-- 	if not has_fired then
+-- 		local min = 10000000000
+-- 		local min_ent = nil
+-- 		local our_transform = world:get_component(entity, Transform)
+-- 		local our_pos = our_transform.translation
+--
+-- 		for other_entity, trans in world:query(Transform):with(PlasmaBot):iter() do
+-- 			local dist = our_pos:distance(trans.translation)
+-- 			if dist < min then
+-- 				min_ent = other_entity
+-- 				min = dist
+-- 			end
+-- 		end
+--
+-- 		print("closest: ", min_ent, min)
+-- 		missile:fire(entity, min_ent)
+-- 		has_fired = true
+-- 	end
+-- end

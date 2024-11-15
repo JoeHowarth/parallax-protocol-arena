@@ -5,6 +5,9 @@
     "diagnostics.globals": [
         "world",
         "entity",
-        "missile"
+        "missile",
+        "sensors",
+        "CraftKind",
+        "missiles"
     ]
 }
