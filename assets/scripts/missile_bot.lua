@@ -5,15 +5,15 @@ local Transform
 local function define_components()
 	if MissileBot == nil then
 		MissileBot = world:get_type_by_name("MissileBot")
-		print(MissileBot)
+		print("MissileBot", MissileBot)
 	end
 	if PlasmaBot == nil then
 		PlasmaBot = world:get_type_by_name("PlasmaBot")
-		print(PlasmaBot)
+		print("PlasmaBot", PlasmaBot)
 	end
 	if Transform == nil then
 		Transform = world:get_type_by_name("Transform")
-		print(Transform)
+		print("Transform", Transform)
 	end
 end
 
@@ -24,7 +24,7 @@ function on_update()
 		local contacts = sensors:contacts()
 		for i, contact in ipairs(contacts) do
 			print("contact ", i, contact.kind, contact.pos, contact.vel)
-			if contact.kind == CraftKind.PlasmaBot then
+			if contact.kind == CraftKind.PlasmaDrone then
 				print("firing...")
 				missiles:fire(contact.entity)
 				return

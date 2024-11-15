@@ -14,8 +14,10 @@ use bevy_mod_picking::{
 };
 use bevy_mod_scripting::prelude::*;
 use bevy_vector_shapes::prelude::*;
-use lua_bevy_interop::{sensor::SensorPlugin, *};
-use sensor::CraftKind;
+use crafts::missile_bot::MissileBot;
+use lua_bevy_interop::{circle_bundle, health_despawn, prelude::*, Health};
+use plasma_drone::PlasmaDrone;
+use subsystems::missile::FireMissile;
 
 fn main() -> Result<()> {
     App::new()
@@ -30,13 +32,21 @@ fn main() -> Result<()> {
         .add_script_host::<LuaScriptHost<()>>(PostUpdate)
         .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaCoreBevyAPIProvider))
         .add_api_provider::<LuaScriptHost<()>>(Box::new(LuaBevyAPIProvider))
-        .add_plugins((MissileBotPlugin, SensorPlugin))
+        .add_plugins((
+            crafts::CraftsPlugin,
+            subsystems::missile::MissilePlugin,
+            subsystems::sensors::SensorPlugin,
+            crafts::missile_bot::MissileBotPlugin,
+            crafts::frigate::FrigatePlugin,
+            crafts::mining_drone::MiningDronePlugin,
+            crafts::asteroid::AsteroidPlugin,
+        ))
         // .add_api_provider::<LuaScriptHost<()>>(Box::new(LifeAPI))
         .insert_resource(Gravity::ZERO)
-        .insert_resource(Selected::<MissileBot>(None))
+        // .insert_resource(Selected::<MissileBot>(None))
         .insert_resource(DebugPickingMode::Normal)
         // .insert_resource(Time::<Fixed>::from_seconds(0.250))
-        .register_type::<PlasmaBot>()
+        // .register_type::<PlasmaBot>()
         .add_systems(Startup, setup)
         .add_systems(
             FixedUpdate,
@@ -82,18 +92,18 @@ fn setup(
         .with_children(|commands| {
             commands.spawn((
                 LinearVelocity(Vec2::new(90., 0.)),
-                plasma_bot_bundle(&asset_server, Vec2::new(-1010., -15.)),
+                PlasmaDrone::bundle(&asset_server, Vec2::new(-1010., -15.)),
             ));
             commands.spawn((
                 LinearVelocity(Vec2::new(60., 0.)),
-                plasma_bot_bundle(&asset_server, Vec2::new(-310., -15.)),
+                PlasmaDrone::bundle(&asset_server, Vec2::new(-310., -15.)),
             ));
             commands.spawn((
                 LinearVelocity(Vec2::new(2., 0.)),
-                plasma_bot_bundle(&asset_server, Vec2::new(-110., -2.)),
+                PlasmaDrone::bundle(&asset_server, Vec2::new(-110., -2.)),
             ));
             commands
-                .spawn(plasma_bot_bundle(&asset_server, Vec2::new(7., -20.)));
+                .spawn(PlasmaDrone::bundle(&asset_server, Vec2::new(7., -20.)));
         });
 
     commands
@@ -108,7 +118,7 @@ fn setup(
         ))
         .with_children(|commands| {
             let missile_bot =
-                |x, y| missile_bot_bundle(&asset_server, Vec2::new(x, y));
+                |x, y| MissileBot::bundle(&asset_server, Vec2::new(x, y));
             commands.spawn(missile_bot(200., -10.));
             commands.spawn(missile_bot(-302., 1.));
             commands.spawn(missile_bot(305., -100.));
@@ -127,17 +137,5 @@ pub fn send_on_update(mut events: PriorityEventWriter<LuaEvent<()>>) {
             recipients: Recipients::All,
         },
         0,
-    )
-}
-
-pub fn plasma_bot_bundle(asset_server: &AssetServer, loc: Vec2) -> impl Bundle {
-    let radius = 10.;
-    let px = 32.;
-    let color = Color::srgb(0.0, 1.0, 0.1);
-    (
-        PlasmaBot,
-        Health(20.),
-        CraftKind::PlasmaBot,
-        circle_bundle(radius, px, color, loc, asset_server),
     )
 }

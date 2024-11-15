@@ -20,7 +20,7 @@ use bevy_mod_scripting::{
 // use bevy_vector_shapes::prelude::*;
 use strum::{EnumIter, EnumString};
 
-use crate::{LuaApiProviderWrapper, LuaProvider};
+use crate::{lua_utils::impl_from_lua_enum, prelude::*, CraftKind};
 
 pub struct SensorPlugin;
 
@@ -30,9 +30,7 @@ impl Plugin for SensorPlugin {
             .register_type::<CraftKind>()
             .register_type::<CraftState>()
             .register_type::<SensorReading>()
-            .add_api_provider::<LuaScriptHost<()>>(Box::new(
-                LuaApiProviderWrapper(SensorPlugin),
-            ));
+            .add_lua_provider(SensorPlugin);
     }
 }
 
@@ -53,7 +51,7 @@ impl LuaProvider for SensorPlugin {
         table.set("range", 500_f32)?;
         table.set(
             "contacts",
-            ctx.create_function(move |ctx, (sensors): (Value)| {
+            ctx.create_function(move |ctx, sensors: Value| {
                 let world = ctx.get_world()?;
                 let mut world = world.write();
 
@@ -160,52 +158,8 @@ impl<'lua> FromLua<'lua> for Action {
 use strum::{Display, EnumDiscriminants, IntoEnumIterator};
 // use strum::*;
 
-#[derive(
-    Component,
-    Default,
-    Reflect,
-    Copy,
-    Clone,
-    Debug,
-    Display,
-    EnumString,
-    EnumIter,
-)]
-pub enum CraftKind {
-    #[default]
-    Asteroid,
-    MissileBot,
-    PlasmaBot,
-    Missile,
-}
-
-// impl<'lua> IntoLua<'lua> for CraftKind {
-//     fn into_lua(self, lua: &'lua Lua) -> LuaResult<Value<'lua>> {}
-// }
 pub fn setup_enum_registries(lua: &Lua) -> LuaResult<()> {
-    setup_string_enum_kind_registry::<CraftKind>(lua)?;
     setup_string_enum_kind_registry::<ActionDiscriminants>(lua)
-}
-
-trait EnumShortName: IntoEnumIterator + Reflect {
-    fn short_name() -> &'static str {
-        let val = Self::iter().next().unwrap();
-        ustr::ustr(val.reflect_short_type_path()).as_str()
-    }
-}
-
-impl<T: IntoEnumIterator + Reflect> EnumShortName for T {}
-
-impl<'lua> IntoLua<'lua> for CraftKind {
-    fn into_lua(self, lua: &'lua Lua) -> LuaResult<LuaValue<'lua>> {
-        impl_into_lua_enum(self, lua)
-    }
-}
-
-impl<'lua> FromLua<'lua> for CraftKind {
-    fn from_lua(value: LuaValue<'lua>, lua: &'lua Lua) -> LuaResult<Self> {
-        impl_from_lua_enum(value, lua)
-    }
 }
 
 #[derive(Debug, Clone, Reflect, Component)]
@@ -243,68 +197,5 @@ impl<'lua> IntoLua<'lua> for CraftState {
         table.set("pos", self.pos.to_lua_proxy(lua)?)?;
         table.set("vel", self.vel.to_lua_proxy(lua)?)?;
         table.into_lua(lua)
-    }
-}
-
-pub fn setup_string_enum_kind_registry<
-    T: Reflect + IntoEnumIterator + ToString + Clone,
->(
-    lua: &Lua,
-) -> LuaResult<()> {
-    let craft_kinds = lua.create_table()?;
-    let reverse_lookup = lua.create_table()?;
-
-    // Iterate over all variants automatically using strum
-    for (i, variant) in T::iter().enumerate() {
-        let variant_str = variant.to_string();
-        craft_kinds.set(variant_str.clone(), i)?;
-        reverse_lookup.set(i, variant_str)?;
-    }
-
-    let short_name = T::short_name();
-    lua.set_named_registry_value(
-        &format!("{short_name}_reverse"),
-        reverse_lookup,
-    )?;
-    lua.globals().set(short_name, craft_kinds)?;
-    Ok(())
-}
-
-fn impl_into_lua_enum<'lua, T: Reflect + ToString>(
-    this: T,
-    lua: &'lua Lua,
-) -> LuaResult<LuaValue<'lua>> {
-    lua.globals()
-        .get::<_, LuaTable>(this.reflect_short_type_path())?
-        .get(this.to_string())
-}
-
-fn impl_from_lua_enum<
-    'lua,
-    T: IntoEnumIterator + Reflect + ToString + FromStr,
->(
-    value: LuaValue<'lua>,
-    lua: &'lua Lua,
-) -> LuaResult<T> {
-    let short_name = T::short_name();
-
-    match value {
-        LuaValue::Integer(i) => {
-            let reverse_lookup: LuaTable =
-                lua.named_registry_value(&format!("{short_name}_reverse"))?;
-            let variant: String = reverse_lookup.get(i)?;
-            variant
-                .parse()
-                .map_err(move |_| LuaError::FromLuaConversionError {
-                    from: "integer",
-                    to: short_name,
-                    message: Some(format!("Invalid {short_name} index")),
-                })
-        }
-        _ => Err(LuaError::FromLuaConversionError {
-            from: value.type_name(),
-            to: short_name,
-            message: Some("Expected integer".into()),
-        }),
     }
 }

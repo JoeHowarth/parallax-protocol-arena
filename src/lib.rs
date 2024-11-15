@@ -1,19 +1,16 @@
-#![allow(unused_imports)]
-
-use std::sync::Mutex;
-
-use bevy::prelude::*;
-use bevy_mod_scripting::prelude::*;
+#![allow(unused_imports, unused_variables)]
 
 pub mod cmd_server;
-pub mod missile_bot;
-pub mod sensor;
+pub mod crafts;
+pub mod lua_utils;
+pub mod prelude;
+pub mod subsystems;
 
-pub use missile_bot::*;
-// pub use sensor::*;
+use bevy_mod_picking::prelude::*;
+pub use crafts::*;
+pub use subsystems::*;
 
-#[derive(Component, Reflect)]
-pub struct PlasmaBot;
+use crate::prelude::*;
 
 #[derive(Component, Reflect)]
 pub struct Health(pub f64);
@@ -27,40 +24,28 @@ pub fn health_despawn(mut commands: Commands, query: Query<(Entity, &Health)>) {
     }
 }
 
-pub trait LuaProvider {
-    fn attach_lua_api(&mut self, ctx: &mut Lua) -> mlua::Result<()>;
-    fn setup_lua_script(
-        &mut self,
-        sd: &ScriptData,
-        ctx: &mut Lua,
-    ) -> mlua::Result<()>;
-}
-
-pub struct LuaApiProviderWrapper<T>(pub T);
-
-impl<T: LuaProvider + Send + Sync + 'static> APIProvider
-    for LuaApiProviderWrapper<T>
-{
-    type APITarget = Mutex<Lua>;
-    type DocTarget = LuaDocFragment;
-    type ScriptContext = Mutex<Lua>;
-
-    fn attach_api(
-        &mut self,
-        api: &mut Self::APITarget,
-    ) -> std::result::Result<(), ScriptError> {
-        let ctx = api.get_mut().unwrap();
-        self.0.attach_lua_api(ctx).map_err(ScriptError::new_other)
-    }
-
-    fn setup_script(
-        &mut self,
-        sd: &ScriptData,
-        api: &mut Self::ScriptContext,
-    ) -> std::result::Result<(), ScriptError> {
-        let ctx = api.get_mut().unwrap();
-        self.0
-            .setup_lua_script(sd, ctx)
-            .map_err(ScriptError::new_other)
-    }
+pub fn circle_bundle(
+    radius: f32,
+    px: f32,
+    color: Color,
+    loc: Vec2,
+    asset_server: &AssetServer,
+) -> impl Bundle {
+    (
+        SpriteBundle {
+            texture: asset_server.load("circle-32.png"),
+            transform:
+                Transform::from_translation(Vec3::from2(loc)) //
+                    .with_scale(Vec3::new(
+                        2. * radius / px,
+                        2. * radius / px,
+                        1.,
+                    )),
+            sprite: Sprite { color, ..default() },
+            ..default()
+        },
+        RigidBody::Dynamic,
+        Collider::circle(radius),
+        PickableBundle::default(),
+    )
 }
