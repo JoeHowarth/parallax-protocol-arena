@@ -3,7 +3,7 @@ use crate::{circle_bundle, prelude::*};
 #[derive(Component, Reflect, Debug)]
 pub struct MissileLastFiredTime(pub f64);
 
-#[derive(Event)]
+#[derive(Event, Clone, Copy)]
 pub struct FireMissile {
     pub from: Entity,
     pub target: Entity,
@@ -20,7 +20,7 @@ impl Plugin for MissilePlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<FireMissile>()
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     handle_fire_missile,
                     update_missiles,
@@ -44,7 +44,7 @@ impl LuaProvider for MissilePlugin {
 
                 let from =
                     lua.globals().get::<_, LuaEntity>("entity")?.inner()?;
-                can_fire(&world, from)
+                Ok(can_fire_world(&world, from))
             })?,
         )?;
         table.set(
@@ -59,7 +59,7 @@ impl LuaProvider for MissilePlugin {
                         lua.globals().get::<_, LuaEntity>("entity")?.inner()?;
 
                     // check if we can fire
-                    if !can_fire(&world, from)? {
+                    if !can_fire_world(&world, from) {
                         return Ok(false);
                     }
 
@@ -87,12 +87,19 @@ impl LuaProvider for MissilePlugin {
     }
 }
 
-pub fn can_fire(world: &World, from: Entity) -> mlua::Result<bool> {
-    if let Some(last_fired) = world.entity(from).get::<MissileLastFiredTime>() {
-        let now = world.resource::<Time<Virtual>>();
-        return Ok(last_fired.0 + 5. < now.elapsed_seconds_f64());
-    }
-    Ok(true)
+pub fn can_fire(
+    last_fired: Option<&MissileLastFiredTime>,
+    now: &Time<Virtual>,
+) -> bool {
+    last_fired.is_none()
+        || last_fired.unwrap().0 + 5. < now.elapsed_seconds_f64()
+}
+
+pub fn can_fire_world(world: &World, from: Entity) -> bool {
+    let now = world.resource::<Time<Virtual>>();
+    let last_fired = world.entity(from).get::<MissileLastFiredTime>();
+
+    can_fire(last_fired, now)
 }
 
 fn handle_missile_collision(
@@ -120,7 +127,7 @@ fn update_missiles(
 ) {
     // Apply a scaled impulse
     // Adjust this value as needed
-    let impulse_strength = 0.1;
+    let impulse_strength = 1.0;
 
     for (e, missile) in missiles.iter() {
         let missile_trans = p.p0().get(e).unwrap().translation;
@@ -188,25 +195,30 @@ fn handle_fire_missile(
     mut reader: EventReader<FireMissile>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    last_fired: Query<&MissileLastFiredTime>,
     locs: Query<&Transform>,
     now: Res<Time<Virtual>>,
 ) {
-    for FireMissile { from, target } in reader.read() {
-        let starting_loc = locs.get(*from).unwrap();
-        let target_loc = locs.get(*target).unwrap();
+    for FireMissile { from, target } in reader.read().cloned() {
+        if !can_fire(last_fired.get(from).ok(), &now) {
+            continue;
+        }
+
+        let starting_loc = locs.get(from).unwrap();
+        let target_loc = locs.get(target).unwrap();
 
         // we will bump bc of collider, so do so in right direction
         let dir = (target_loc.translation - starting_loc.translation)
             .normalize()
             .xy();
-        let loc = starting_loc.translation.xy() + dir * 5.;
+        let loc = starting_loc.translation.xy() + dir * 20.;
 
         commands
-            .entity(*from)
+            .entity(from)
             .insert(MissileLastFiredTime(now.elapsed_seconds_f64()));
 
         commands.spawn((
-            Missile { target: *target },
+            Missile { target },
             CraftKind::Missile,
             circle_bundle(1., 32., Color::srgb(0., 1., 1.), loc, &asset_server),
         ));

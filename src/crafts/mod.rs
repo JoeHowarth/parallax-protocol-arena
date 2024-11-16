@@ -3,7 +3,6 @@ use crate::prelude::*;
 pub mod asteroid;
 pub mod frigate;
 pub mod mining_drone;
-pub mod missile_bot;
 pub mod plasma_drone;
 
 pub struct CraftsPlugin;
@@ -44,7 +43,7 @@ impl LuaProvider for CraftsPlugin {
 pub enum CraftKind {
     #[default]
     Asteroid,
-    MissileBot,
+    Frigate,
     PlasmaDrone,
     Missile,
 }

@@ -1,3 +1,5 @@
+use flight_controller::Engines;
+
 use crate::prelude::*;
 
 #[derive(Component, Reflect, Debug)]
@@ -19,6 +21,7 @@ impl PlasmaDrone {
         (
             PlasmaDrone,
             Health(20.),
+            Engines { max_accel: 1.0 },
             CraftKind::PlasmaDrone,
             circle_bundle(radius, px, color, loc, asset_server),
         )
