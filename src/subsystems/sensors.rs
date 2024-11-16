@@ -43,15 +43,28 @@ impl LuaProvider for SensorPlugin {
     fn setup_lua_script(
         &mut self,
         sd: &ScriptData,
-        ctx: &mut Lua,
+        lua: &mut Lua,
     ) -> mlua::Result<()> {
-        let table = ctx.create_table()?;
+        let table = lua.create_table()?;
         let craft_entity = sd.entity;
-        table.set("craft_entity", Entity::to_lua_proxy(sd.entity, ctx)?)?;
+        table.set("craft_entity", Entity::to_lua_proxy(sd.entity, lua)?)?;
         table.set("range", 500_f32)?;
+
+        table.set(
+            "faction",
+            lua.create_function(move |lua, _: Value| {
+                let world = lua.get_world()?;
+                let world = world.read();
+                let faction =
+                    world.entity(craft_entity).get::<Faction>().unwrap();
+                Ok(*faction)
+            })?,
+        )?;
+        dbg!("here");
+
         table.set(
             "contacts",
-            ctx.create_function(move |ctx, sensors: Value| {
+            lua.create_function(move |ctx, sensors: Value| {
                 let world = ctx.get_world()?;
                 let mut world = world.write();
 
@@ -66,6 +79,7 @@ impl LuaProvider for SensorPlugin {
                     &CraftKind,
                     &Position,
                     &LinearVelocity,
+                    &Faction,
                 )>();
 
                 // let mut sensor_range: f32 = sensors.get("range")?;
@@ -74,7 +88,7 @@ impl LuaProvider for SensorPlugin {
                 // }
                 let mut results_vec = Vec::new();
 
-                for (e, kind, pos, vel) in query.iter(&world) {
+                for (e, kind, pos, vel, faction) in query.iter(&world) {
                     let dist = pos.distance(craft_pos.xy());
                     // if dist < sensor_range {
                     if dist < 500. {
@@ -84,6 +98,7 @@ impl LuaProvider for SensorPlugin {
                             vel: vel.xy(),
                             dist,
                             kind: *kind,
+                            faction: *faction,
                         });
                     }
                 }
@@ -99,7 +114,7 @@ impl LuaProvider for SensorPlugin {
             })?,
         )?;
 
-        ctx.globals().set("sensors", table)?;
+        lua.globals().set("sensors", table)?;
 
         Ok(())
     }
@@ -170,6 +185,7 @@ pub struct SensorReading {
     pub vel: Vec2,
     pub dist: f32,
     pub kind: CraftKind,
+    pub faction: Faction,
 }
 
 impl<'lua> IntoLua<'lua> for SensorReading {
@@ -180,6 +196,7 @@ impl<'lua> IntoLua<'lua> for SensorReading {
         table.set("vel", Vec2::to_lua_proxy(self.vel, lua)?)?;
         table.set("dist", self.dist)?;
         table.set("kind", self.kind)?;
+        table.set("faction", self.faction)?;
 
         table.into_lua(lua)
     }

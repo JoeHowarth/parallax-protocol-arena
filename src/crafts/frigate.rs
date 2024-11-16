@@ -11,10 +11,23 @@ impl Plugin for FrigatePlugin {
 }
 
 impl Frigate {
-    pub fn bundle(asset_server: &AssetServer, loc: Vec2) -> impl Bundle {
+    pub fn spawn(x: f32, y: f32, faction: Faction) -> impl Command {
+        move |world: &mut World| {
+            world.spawn(Frigate::bundle(
+                world.resource::<AssetServer>(),
+                Vec2::new(x, y),
+                faction,
+            ));
+        }
+    }
+
+    pub fn bundle(
+        asset_server: &AssetServer,
+        loc: Vec2,
+        faction: Faction,
+    ) -> impl Bundle {
         let radius = 15.;
         let px = 32.;
-        let color = Color::srgb(1.0, 0.0, 0.1);
         let script_path = "scripts/frigate.lua".to_string();
         let handle = asset_server.load(&script_path);
         (
@@ -26,7 +39,7 @@ impl Frigate {
             CraftKind::Frigate,
             Engines { max_accel: 0.4 },
             Health(50.),
-            ship_bundle(radius, px, color, loc, asset_server),
+            ship_bundle("Ship.png", radius, px, faction, loc, asset_server),
         )
     }
 }

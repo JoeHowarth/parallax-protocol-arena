@@ -8,6 +8,7 @@
         "missile",
         "sensors",
         "CraftKind",
-        "missiles"
+        "missiles",
+        "Faction"
     ]
 }

@@ -34,6 +34,8 @@ fn main() -> Result<()> {
         .add_plugins((
             keyboard_controller::KeyboardControllerPlugin,
             crafts::CraftsPlugin,
+        ))
+        .add_plugins((
             subsystems::missile::MissilePlugin,
             subsystems::sensors::SensorPlugin,
             subsystems::flight_controller::FlightControllerPlugin,
@@ -72,56 +74,41 @@ fn setup(
         },
     ));
 
-    // commands
-    // .spawn((
-    //     SpatialBundle::default(),
-    //     On::<Pointer<Click>>::run(
-    //         |e: Listener<Pointer<Click>>,
-    //          selected: ResMut<Selected<Frigate>>,
-    //          mut tx: EventWriter<FireMissile>| {
-    //             let Some((missile_bot_e, _)) = &selected.0 else {
-    //                 return;
-    //             };
-    //             tx.send(FireMissile {
-    //                 from: *missile_bot_e,
-    //                 target: e.target(),
-    //             });
-    //         },
-    //     ),
-    // ))
-    // .with_children(|commands| {
     commands.spawn((
         LinearVelocity(Vec2::new(90., 0.)),
-        PlasmaDrone::bundle(&asset_server, Vec2::new(-1010., -15.)),
+        PlasmaDrone::bundle(
+            &asset_server,
+            Vec2::new(-1010., -15.),
+            Faction::Red,
+        ),
     ));
     commands.spawn((
         LinearVelocity(Vec2::new(60., 0.)),
-        PlasmaDrone::bundle(&asset_server, Vec2::new(-310., -15.)),
+        PlasmaDrone::bundle(
+            &asset_server,
+            Vec2::new(-310., -15.),
+            Faction::Red,
+        ),
     ));
     commands.spawn((
         LinearVelocity(Vec2::new(2., 0.)),
-        PlasmaDrone::bundle(&asset_server, Vec2::new(-110., -2.)),
+        PlasmaDrone::bundle(
+            &asset_server,
+            Vec2::new(-110., -2.),
+            Faction::Unaligned,
+        ),
     ));
-    commands.spawn(PlasmaDrone::bundle(&asset_server, Vec2::new(7., -20.)));
-    // });
+    commands.spawn(PlasmaDrone::bundle(
+        &asset_server,
+        Vec2::new(7., -20.),
+        Faction::Blue,
+    ));
 
-    // commands
-    //     .spawn((
-    //         SpatialBundle::default(),
-    //         On::<Pointer<Click>>::run(
-    //             |listener: Listener<Pointer<Click>>,
-    //              mut selected: ResMut<Selected<Frigate>>| {
-    //                 selected.0 = Some((listener.target(), Frigate));
-    //             },
-    //         ),
-    //     ))
-    //     .with_children(|commands| {
-    let frigate = |x, y| Frigate::bundle(&asset_server, Vec2::new(x, y));
-    commands.spawn(frigate(200., -10.));
-    commands.spawn(frigate(-302., 1.));
-    commands.spawn(frigate(305., -100.));
-    commands.spawn(frigate(5., -400.));
-    // });
+    commands.add(Frigate::spawn(200., -10., Faction::Blue));
+    commands.add(Frigate::spawn(200., -10., Faction::Blue));
+    commands.add(Frigate::spawn(-302., 1., Faction::Red));
+    commands.add(Frigate::spawn(305., -100., Faction::Red));
+    commands.add(Frigate::spawn(5., -400., Faction::Blue));
 
     painter.set_2d();
 }

@@ -7,6 +7,8 @@ pub mod lua_utils;
 pub mod prelude;
 pub mod subsystems;
 
+use std::borrow::Cow;
+
 use bevy::ecs::world::Command;
 use bevy_mod_picking::prelude::*;
 pub use crafts::*;
@@ -59,15 +61,17 @@ pub fn circle_bundle(
 }
 
 pub fn ship_bundle(
+    sprite_name: &'static str,
     radius: f32,
     px: f32,
-    color: Color,
+    faction: Faction,
     loc: Vec2,
     asset_server: &AssetServer,
 ) -> impl Bundle {
     (
+        faction,
         SpriteBundle {
-            texture: asset_server.load("Ship.png"),
+            texture: asset_server.load(sprite_name),
             transform:
                 Transform::from_translation(Vec3::from2(loc)) //
                     .with_scale(Vec3::new(
@@ -75,7 +79,10 @@ pub fn ship_bundle(
                         2. * radius / px,
                         1.,
                     )),
-            sprite: Sprite { color, ..default() },
+            sprite: Sprite {
+                color: faction.sprite_color(),
+                ..default()
+            },
             ..default()
         },
         RigidBody::Dynamic,
