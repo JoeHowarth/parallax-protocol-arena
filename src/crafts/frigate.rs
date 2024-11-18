@@ -1,4 +1,5 @@
-use flight_controller::Engines;
+use engines::Engines;
+use missile::MissileBay;
 
 use crate::{circle_bundle, prelude::*, Health};
 
@@ -37,8 +38,15 @@ impl Frigate {
             },
             LuaHooks::one("on_update"),
             CraftKind::Frigate,
-            Engines { max_accel: 0.4 },
+            Engines {
+                max_accel: 0.4,
+                max_ang_accel: 0.1,
+            },
             Health(50.),
+            MissileBay {
+                last_fired: -100.,
+                reload_time: 5.,
+            },
             ship_bundle("Ship.png", radius, px, faction, loc, asset_server),
         )
     }

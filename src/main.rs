@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use avian2d::prelude::*;
-use bevy::{prelude::*, time::common_conditions::on_timer};
+use bevy::{prelude::*, time::common_conditions::on_timer, window::WindowMode};
 use bevy_mod_picking::{
     debug::DebugPickingMode,
     events::Click,
@@ -23,7 +23,15 @@ use subsystems::missile::FireMissile;
 fn main() -> Result<()> {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resolution: bevy::window::WindowResolution::new(
+                        1700., 1100.,
+                    ),
+                    ..default()
+                }),
+                ..default()
+            }),
             bevy_pancam::PanCamPlugin,
             Shape2dPlugin::default(),
             PhysicsPlugins::default(),
@@ -94,7 +102,7 @@ fn setup(
         LinearVelocity(Vec2::new(2., 0.)),
         PlasmaDrone::bundle(
             &asset_server,
-            Vec2::new(-110., -2.),
+            Vec2::new(-112., -2.),
             Faction::Unaligned,
         ),
     ));

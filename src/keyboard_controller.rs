@@ -85,6 +85,12 @@ fn update(
     let Some(e) = selected.0 else {
         return;
     };
+    // check if selected entity exists
+    if commands.get_entity(e).is_none() {
+        selected.0 = None;
+        return;
+    }
+
     let kind = crafts.get(e).unwrap();
 
     if keys.just_pressed(KeyCode::KeyC) {

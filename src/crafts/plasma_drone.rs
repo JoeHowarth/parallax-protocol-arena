@@ -1,4 +1,4 @@
-use flight_controller::Engines;
+use engines::Engines;
 
 use crate::prelude::*;
 
@@ -25,7 +25,10 @@ impl PlasmaDrone {
         (
             PlasmaDrone,
             Health(20.),
-            Engines { max_accel: 1.0 },
+            Engines {
+                max_accel: 1.0,
+                max_ang_accel: 0.1,
+            },
             CraftKind::PlasmaDrone,
             ship_bundle(
                 "circle-32.png",

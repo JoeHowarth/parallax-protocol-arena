@@ -6,6 +6,7 @@ pub mod keyboard_controller;
 pub mod lua_utils;
 pub mod prelude;
 pub mod subsystems;
+pub mod utils;
 
 use std::borrow::Cow;
 

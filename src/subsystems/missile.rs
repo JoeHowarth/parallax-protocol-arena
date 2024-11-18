@@ -1,7 +1,12 @@
+use utils::intersect_ray_aabb;
+
 use crate::{circle_bundle, prelude::*};
 
 #[derive(Component, Reflect, Debug)]
-pub struct MissileLastFiredTime(pub f64);
+pub struct MissileBay {
+    pub last_fired: f64,
+    pub reload_time: f64,
+}
 
 #[derive(Event, Clone, Copy)]
 pub struct FireMissile {
@@ -27,9 +32,7 @@ impl Plugin for MissilePlugin {
                     handle_missile_collision,
                 ),
             )
-            .add_api_provider::<LuaScriptHost<()>>(Box::new(
-                LuaApiProviderWrapper(MissilePlugin),
-            ));
+            .add_lua_provider(MissilePlugin);
     }
 }
 
@@ -87,19 +90,17 @@ impl LuaProvider for MissilePlugin {
     }
 }
 
-pub fn can_fire(
-    last_fired: Option<&MissileLastFiredTime>,
-    now: &Time<Virtual>,
-) -> bool {
-    last_fired.is_none()
-        || last_fired.unwrap().0 + 5. < now.elapsed_seconds_f64()
+impl MissileBay {
+    pub fn can_fire(&self, now: &Time<Virtual>) -> bool {
+        self.last_fired + self.reload_time < now.elapsed_seconds_f64()
+    }
 }
 
 pub fn can_fire_world(world: &World, from: Entity) -> bool {
     let now = world.resource::<Time<Virtual>>();
-    let last_fired = world.entity(from).get::<MissileLastFiredTime>();
+    let last_fired = world.entity(from).get::<MissileBay>();
 
-    can_fire(last_fired, now)
+    last_fired.map(|bay| bay.can_fire(now)).unwrap_or(false)
 }
 
 fn handle_missile_collision(
@@ -127,7 +128,7 @@ fn update_missiles(
 ) {
     // Apply a scaled impulse
     // Adjust this value as needed
-    let impulse_strength = 1.0;
+    let impulse_strength = 1.1;
 
     for (e, missile) in missiles.iter() {
         let missile_trans = p.p0().get(e).unwrap().translation;
@@ -195,32 +196,49 @@ fn handle_fire_missile(
     mut reader: EventReader<FireMissile>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    last_fired: Query<&MissileLastFiredTime>,
+    mut missile_bays: Query<(
+        &mut MissileBay,
+        Option<&Collider>,
+        &LinearVelocity,
+    )>,
     locs: Query<&Transform>,
     now: Res<Time<Virtual>>,
 ) {
     for FireMissile { from, target } in reader.read().cloned() {
-        if !can_fire(last_fired.get(from).ok(), &now) {
+        let Ok((mut missile_bay, collider, vel)) = missile_bays.get_mut(from)
+        else {
+            continue;
+        };
+        if !missile_bay.can_fire(&now) {
             continue;
         }
 
-        let starting_loc = locs.get(from).unwrap();
-        let target_loc = locs.get(target).unwrap();
+        let starting = locs.get(from).unwrap();
+        let starting_pt = starting.translation.xy();
+        let forward = starting.local_y().xy();
+
+        let loc = match collider.and_then(|collider| {
+            let aabb = collider.aabb(starting_pt, starting.rotation);
+            intersect_ray_aabb(aabb.min, aabb.max, starting_pt, forward).ok()
+        }) {
+            Some(pt) => (pt - starting_pt) * 1.2 + starting_pt,
+            None => starting_pt + forward * 15.,
+        };
 
         // we will bump bc of collider, so do so in right direction
-        let dir = (target_loc.translation - starting_loc.translation)
-            .normalize()
-            .xy();
-        let loc = starting_loc.translation.xy() + dir * 20.;
-
-        commands
-            .entity(from)
-            .insert(MissileLastFiredTime(now.elapsed_seconds_f64()));
-
-        commands.spawn((
+        let loc = commands.spawn((
             Missile { target },
             CraftKind::Missile,
-            circle_bundle(1., 32., Color::srgb(0., 1., 1.), loc, &asset_server),
+            LinearVelocity(vel.0 + forward * 50.),
+            circle_bundle(
+                1.,
+                32.,
+                Color::srgb(0., 1., 1.),
+                loc.xy(),
+                &asset_server,
+            ),
         ));
+
+        missile_bay.last_fired = now.elapsed_seconds_f64();
     }
 }

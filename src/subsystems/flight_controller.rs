@@ -4,6 +4,7 @@ use std::{
 };
 
 use bevy::time::Stopwatch;
+use engines::Engines;
 
 use crate::prelude::*;
 
@@ -19,17 +20,11 @@ pub struct LuaFlightController;
 #[derive(Component, Reflect, Debug)]
 pub struct KeyboardFlightController;
 
-#[derive(Component, Reflect, Debug)]
-pub struct Engines {
-    pub max_accel: f32,
-}
-
 pub struct FlightControllerPlugin;
 
 impl Plugin for FlightControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<Engines>()
-            .register_type::<FlightController>()
+        app.register_type::<FlightController>()
             .register_type::<LuaFlightController>()
             .register_type::<KeyboardFlightController>()
             .add_systems(
