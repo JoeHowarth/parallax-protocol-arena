@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Mutex};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use avian2d::prelude::{LinearVelocity, Position};
 // use avian2d::prelude::*;
 use bevy::{math::NormedVectorSpace, prelude::*};
@@ -60,7 +60,43 @@ impl LuaProvider for SensorPlugin {
                 Ok(*faction)
             })?,
         )?;
-        dbg!("here");
+
+        table.set(
+            "craft_state",
+            lua.create_function(move |lua, sensors: Value| {
+                let world = lua.get_world()?;
+                let world = world.read();
+                let e = LuaError::RuntimeError(
+                    "Failed to get component for craft_entity".into(),
+                );
+                let trans = world
+                    .entity(craft_entity)
+                    .get::<Transform>()
+                    .ok_or(e.clone())?;
+                let vel = world
+                    .entity(craft_entity)
+                    .get::<LinearVelocity>()
+                    .ok_or(e.clone())?;
+                let health = world
+                    .entity(craft_entity)
+                    .get::<Health>()
+                    .ok_or(e.clone())?
+                    .clone();
+                let kind = world
+                    .entity(craft_entity)
+                    .get::<CraftKind>()
+                    .ok_or(e)?
+                    .clone();
+
+                Ok(CraftState {
+                    pos: trans.translation.xy(),
+                    vel: vel.0,
+                    forwards: trans.local_y().xy(),
+                    health,
+                    kind,
+                })
+            })?,
+        )?;
 
         table.set(
             "contacts",
@@ -71,7 +107,9 @@ impl LuaProvider for SensorPlugin {
                 let craft_pos = world
                     .entity(craft_entity)
                     .get::<Position>()
-                    .unwrap()
+                    .ok_or(LuaError::RuntimeError(
+                        "Failed to get entity".into(),
+                    ))?
                     .clone();
 
                 let mut query = world.query::<(
@@ -206,6 +244,9 @@ impl<'lua> IntoLua<'lua> for SensorReading {
 pub struct CraftState {
     pub pos: Vec2,
     pub vel: Vec2,
+    pub forwards: Vec2,
+    pub kind: CraftKind,
+    pub health: Health,
 }
 
 impl<'lua> IntoLua<'lua> for CraftState {
@@ -213,6 +254,9 @@ impl<'lua> IntoLua<'lua> for CraftState {
         let table = lua.create_table()?;
         table.set("pos", self.pos.to_lua_proxy(lua)?)?;
         table.set("vel", self.vel.to_lua_proxy(lua)?)?;
+        table.set("forwards", self.forwards.to_lua_proxy(lua)?)?;
+        table.set("kind", self.kind)?;
+        table.set("health", self.health.0)?;
         table.into_lua(lua)
     }
 }

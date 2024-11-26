@@ -14,6 +14,7 @@ use bevy_mod_picking::{
 };
 use bevy_mod_scripting::prelude::*;
 use bevy_vector_shapes::prelude::*;
+use engines::EngineInput;
 use flight_controller::KeyboardFlightController;
 use frigate::Frigate;
 use lua_bevy_interop::{circle_bundle, health_despawn, prelude::*, Health};
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
             }),
             bevy_pancam::PanCamPlugin,
             Shape2dPlugin::default(),
-            PhysicsPlugins::default(),
+            PhysicsPlugins::new(FixedPostUpdate),
             DefaultPickingPlugins,
             ScriptingPlugin,
             LuaManagerPlugin,
@@ -47,12 +48,13 @@ fn main() -> Result<()> {
             subsystems::missile::MissilePlugin,
             subsystems::sensors::SensorPlugin,
             subsystems::flight_controller::FlightControllerPlugin,
+            subsystems::engines::EnginesPlugin,
             crafts::frigate::FrigatePlugin,
             crafts::mining_drone::MiningDronePlugin,
             crafts::asteroid::AsteroidPlugin,
         ))
         .insert_resource(Time::<Fixed>::from_duration(Duration::from_millis(
-            200,
+            50,
         )))
         .insert_resource(Gravity::ZERO)
         .insert_resource(DebugPickingMode::Normal)
@@ -115,6 +117,24 @@ fn setup(
         Faction::Blue,
     ));
 
+    let script_path = "scripts/flight_controller.lua".to_string();
+    let handle = asset_server.load(&script_path);
+    commands.spawn((
+        PlasmaDrone::bundle(
+            &asset_server,
+            Vec2::new(100., -10.),
+            Faction::Unaligned,
+        ),
+        LinearVelocity(Vec2::new(20., 30.)),
+        // EngineInput {
+        //     accel: 1.,
+        //     target_ang: PI,
+        // },
+        ScriptCollection::<LuaFile> {
+            scripts: vec![Script::new(script_path, handle)],
+        },
+        LuaHooks::one("on_update"),
+    ));
     commands.add(Frigate::spawn(200., -10., Faction::Blue));
     commands.add(Frigate::spawn(200., -10., Faction::Blue));
     commands.add(Frigate::spawn(-302., 1., Faction::Red));

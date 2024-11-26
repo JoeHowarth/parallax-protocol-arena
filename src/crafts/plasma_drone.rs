@@ -28,7 +28,7 @@ impl PlasmaDrone {
             PlasmaDrone,
             Health(20.),
             Engines {
-                max_accel: 1.0,
+                max_accel: 100.0,
                 max_rot: PI / 12.,
             },
             CraftKind::PlasmaDrone,

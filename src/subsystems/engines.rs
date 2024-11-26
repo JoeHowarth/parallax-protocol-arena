@@ -1,5 +1,8 @@
 use std::f32::consts::PI;
 
+use bevy::color::palettes::css;
+use bevy_mod_scripting::prelude::{mlua, FromLua};
+
 use crate::prelude::*;
 
 #[derive(Component, Reflect, Debug)]
@@ -18,7 +21,71 @@ pub struct EnginesPlugin;
 
 impl Plugin for EnginesPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<Engines>();
+        app.register_type::<Engines>()
+            .register_type::<EngineInput>()
+            .add_lua_provider(EnginesPlugin)
+            .add_systems(FixedPostUpdate, apply_engine_inputs);
+    }
+}
+
+impl LuaProvider for EnginesPlugin {
+    fn attach_lua_api(&mut self, lua: &mut Lua) -> mlua::Result<()> {
+        Ok(())
+    }
+
+    fn setup_lua_script(
+        &mut self,
+        sd: &ScriptData,
+        lua: &mut Lua,
+    ) -> mlua::Result<()> {
+        let craft_entity = sd.entity;
+        let table = lua.create_table()?;
+        table.set(
+            "engine_info",
+            lua.create_function(move |lua, _: Value| {
+                let world = lua.get_world()?;
+                let world = world.read();
+                let entity_ref = world.get_entity(craft_entity).ok_or(
+                    LuaError::RuntimeError(
+                        "Failed to get entity from world".into(),
+                    ),
+                )?;
+                let engines = entity_ref.get::<Engines>().ok_or(
+                    LuaError::RuntimeError(
+                        "Entity does not have engines".into(),
+                    ),
+                )?;
+
+                let table = lua.create_table_with_capacity(0, 2)?;
+                table.set("max_accel", engines.max_accel)?;
+                table.set("max_rot", engines.max_rot)?;
+
+                Ok(table)
+            })?,
+        )?;
+        table.set(
+            "set_engine_input",
+            lua.create_function(
+                move |lua, (accel, target_ang): (f32, f32)| {
+                    let world = lua.get_world()?;
+                    let mut world = world.write();
+                    world
+                        .get_entity_mut(craft_entity)
+                        .ok_or(LuaError::RuntimeError(
+                            "Failed to get entity from world".into(),
+                        ))?
+                        .insert(EngineInput { accel, target_ang });
+
+                    Ok(())
+                },
+            )?,
+        )?;
+        lua.globals().set("engines", table)?;
+        // let globals = lua.globals();
+        // for p in globals.pairs::<Value, Value>() {
+        //     dbg!(p?);
+        // }
+        Ok(())
     }
 }
 
@@ -29,16 +96,25 @@ fn apply_engine_inputs(
         &Engines,
         &mut Transform,
         &mut LinearVelocity,
+        &mut AngularVelocity,
     )>,
+    mut painter: ShapePainter,
 ) {
     for inputs in query.iter_mut() {
-        let (_entity, input, engines, mut transform, mut _vel) = inputs;
+        let (_entity, input, engines, mut transform, mut vel, mut ang_vel) =
+            inputs;
+        // dbg!(_entity);
+        painter.set_translation(transform.translation);
+        painter.set_color(css::PINK);
+        painter.line(Vec3::ZERO, transform.local_y() * 50.);
+
+        ang_vel.0 = 0.;
         apply_engine_inputs_inner((
             _entity,
             input,
             engines,
             &mut transform,
-            &mut _vel,
+            &mut vel,
         ));
     }
 }
@@ -64,8 +140,10 @@ fn apply_engine_inputs_inner(
     while angle_diff < -PI {
         angle_diff += 2.0 * PI;
     }
+    let rot_to_apply = angle_diff.clamp(-engines.max_rot, engines.max_rot);
+    // dbg!(current_angle, angle_diff, rot_to_apply);
 
-    transform.rotate_z(angle_diff.clamp(-engines.max_rot, engines.max_rot));
+    transform.rotate_z(rot_to_apply);
 
     vel.0 += transform.local_y().xy() * input.accel.min(engines.max_accel);
 }

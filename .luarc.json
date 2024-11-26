@@ -9,6 +9,8 @@
         "sensors",
         "CraftKind",
         "missiles",
-        "Faction"
+        "Faction",
+        "engines",
+        "Vec2"
     ]
 }

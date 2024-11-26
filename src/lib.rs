@@ -17,7 +17,7 @@ pub use subsystems::*;
 
 use crate::prelude::*;
 
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Clone, Debug)]
 pub struct Health(pub f64);
 
 pub fn send_event<E: Event>(e: E) -> impl Command {

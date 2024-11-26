@@ -22,7 +22,7 @@ bevy_pancam = "0.14"
 bevy_vector_shapes = "0.8.2"
 avian2d = "0.1"
 bevy_mod_picking = { version = "0.20", default-features = false, features = [ "backend_bevy_ui", "backend_sprite", "debug", "selection", "highlight" ] }
-bevy_mod_scripting = { version = "0.7.1", features = ["bevy_script_api", "lua_script_api", "luajit52"] }
+bevy_mod_scripting = { version = "0.7.1", features = ["bevy_script_api", "lua_script_api", "luajit52", "mlua_macros"] }
 strum = { version = "0.26.3", features = ["derive", "strum_macros"] }
 ustr = "1.1.0"
 
