@@ -88,6 +88,7 @@ pub fn ship_bundle(
         },
         RigidBody::Dynamic,
         Collider::circle(radius),
+        SweptCcd::default(),
         PickableBundle::default(),
     )
 }

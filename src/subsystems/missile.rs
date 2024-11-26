@@ -105,14 +105,22 @@ pub fn can_fire_world(world: &World, from: Entity) -> bool {
 
 fn handle_missile_collision(
     mut commands: Commands,
-    missiles: Query<(Entity, &CollidingEntities, &Missile)>,
+    mut all_collisions: EventReader<CollisionStarted>,
+    missiles: Query<&Missile>,
     mut health: Query<&mut Health, Without<Missile>>,
 ) {
-    for (e, colliding_entities, missile) in missiles.iter() {
-        if colliding_entities.0.contains(&missile.target) {
-            info!("Collision");
-            commands.entity(e).despawn();
-            health.get_mut(missile.target).unwrap().0 -= 10.;
+    for CollisionStarted(e1, e2) in all_collisions.read() {
+        if let Ok(missile) = missiles.get(*e1) {
+            commands.entity(*e1).despawn();
+            if let Ok(mut h) = health.get_mut(missile.target) {
+                h.0 -= 10.;
+            }
+        }
+        if let Ok(missile) = missiles.get(*e2) {
+            commands.entity(*e2).despawn();
+            if let Ok(mut h) = health.get_mut(missile.target) {
+                h.0 -= 10.;
+            }
         }
     }
 }

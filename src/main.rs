@@ -51,6 +51,9 @@ fn main() -> Result<()> {
             crafts::mining_drone::MiningDronePlugin,
             crafts::asteroid::AsteroidPlugin,
         ))
+        .insert_resource(Time::<Fixed>::from_duration(Duration::from_millis(
+            200,
+        )))
         .insert_resource(Gravity::ZERO)
         .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)

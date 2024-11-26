@@ -13,13 +13,13 @@ function on_update()
 		print("frigate can fire", entity)
 		local contacts = sensors:contacts()
 		for i, contact in ipairs(contacts) do
-			print("contact ", i, contact.kind, contact.pos, contact.vel)
+			-- print("contact ", i, contact.kind, contact.pos, contact.vel)
 			if is_enemy(contact.faction) then
 				print("firing at enemy...")
 				missiles:fire(contact.entity)
 				return
 			end
-			print("not enemy :(")
+			-- print("not enemy :(")
 		end
 	end
 end
