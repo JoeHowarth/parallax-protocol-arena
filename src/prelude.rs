@@ -1,3 +1,5 @@
+pub use std::f32::consts::PI;
+
 pub use ::bevy::prelude::*;
 pub use ::std::{
     str::FromStr,

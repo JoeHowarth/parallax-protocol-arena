@@ -40,7 +40,7 @@ impl Frigate {
             CraftKind::Frigate,
             Engines {
                 max_accel: 0.4,
-                max_ang_accel: 0.1,
+                max_rot: PI / 12.,
             },
             Health(50.),
             MissileBay {

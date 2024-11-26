@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 use engines::Engines;
 
 use crate::prelude::*;
@@ -27,7 +29,7 @@ impl PlasmaDrone {
             Health(20.),
             Engines {
                 max_accel: 1.0,
-                max_ang_accel: 0.1,
+                max_rot: PI / 12.,
             },
             CraftKind::PlasmaDrone,
             ship_bundle(
