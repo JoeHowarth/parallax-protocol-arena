@@ -23,11 +23,12 @@ fn main() {
             DefaultPickingPlugins,
             Shape2dPlugin::default(),
         ))
-        .add_plugins(PhysicsSimulationPlugin)
-        .insert_resource(SimulationConfig {
-            ticks_per_second: 5,
-            time_dilation: 3.,
-            ..default()
+        .add_plugins(PhysicsSimulationPlugin {
+            config: SimulationConfig {
+                ticks_per_second: 5,
+                time_dilation: 3.,
+                ..default()
+            },
         })
         .insert_resource(Gravity::ZERO)
         .insert_resource(DebugPickingMode::Normal)

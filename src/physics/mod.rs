@@ -96,16 +96,25 @@ impl Default for SimulationConfig {
 }
 
 /// Plugin that sets up the physics simulation systems
-pub struct PhysicsSimulationPlugin;
+pub struct PhysicsSimulationPlugin {
+    pub config: SimulationConfig,
+}
+
+impl Default for PhysicsSimulationPlugin {
+    fn default() -> Self {
+        Self {
+            config: SimulationConfig::default(),
+        }
+    }
+}
 
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
-        let config = SimulationConfig::default();
         app.add_event::<TimelineEventRequest>()
+            .insert_resource(self.config.clone())
             .insert_resource(Time::<Fixed>::from_hz(
-                config.ticks_per_second as f64 * config.time_dilation as f64,
+                self.config.ticks_per_second as f64 * self.config.time_dilation as f64,
             ))
-            .insert_resource(config)
             .add_systems(
                 FixedUpdate,
                 (
