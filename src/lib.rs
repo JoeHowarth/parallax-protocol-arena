@@ -4,6 +4,7 @@ pub mod cmd_server;
 pub mod crafts;
 pub mod keyboard_controller;
 pub mod lua_utils;
+pub mod physics;
 pub mod prelude;
 pub mod subsystems;
 pub mod utils;

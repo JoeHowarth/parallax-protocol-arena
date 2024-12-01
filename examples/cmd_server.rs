@@ -1,5 +1,5 @@
 use anyhow::Result;
-use lua_bevy_interop::cmd_server::*;
+use parallax_protocol_arena::cmd_server::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {

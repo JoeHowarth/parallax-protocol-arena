@@ -17,7 +17,12 @@ use bevy_vector_shapes::prelude::*;
 use engines::EngineInput;
 use flight_controller::KeyboardFlightController;
 use frigate::Frigate;
-use lua_bevy_interop::{circle_bundle, health_despawn, prelude::*, Health};
+use parallax_protocol_arena::{
+    circle_bundle,
+    health_despawn,
+    prelude::*,
+    Health,
+};
 use plasma_drone::PlasmaDrone;
 use subsystems::missile::FireMissile;
 
@@ -65,11 +70,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn exit_system(
+pub fn exit_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut exit: EventWriter<AppExit>,
 ) {
-    if keys.all_pressed([KeyCode::SuperLeft, KeyCode::KeyW]) {
+    if keys.all_pressed([KeyCode::ControlLeft, KeyCode::KeyC]) {
         exit.send(AppExit::Success);
     }
 }

@@ -241,6 +241,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_approx_eq"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c07dab4369547dbe5114677b33fbbf724971019f3818172d59a97a61c774ffd"
+
+[[package]]
 name = "async-broadcast"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3428,28 +3434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lua_bevy_interop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "avian2d",
- "bevy",
- "bevy_mod_picking",
- "bevy_mod_scripting",
- "bevy_pancam",
- "bevy_vector_shapes",
- "log",
- "reqwest",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_v8",
- "strum 0.26.3",
- "tokio",
- "ustr",
-]
-
-[[package]]
 name = "luajit-src"
 version = "210.5.11+97813fb"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4237,6 +4221,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22ec719bbf3b2a81c109a4e20b1f129b5566b7dce654bc3872f6a05abf82b2c4"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "parallax-protocol-arena"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_approx_eq",
+ "avian2d",
+ "bevy",
+ "bevy_mod_picking",
+ "bevy_mod_scripting",
+ "bevy_pancam",
+ "bevy_vector_shapes",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_v8",
+ "strum 0.26.3",
+ "tokio",
+ "ustr",
 ]
 
 [[package]]

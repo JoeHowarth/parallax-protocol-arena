@@ -1,5 +1,5 @@
 [package]
-name = "lua_bevy_interop"
+name = "parallax-protocol-arena"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"
@@ -25,6 +25,7 @@ bevy_mod_picking = { version = "0.20", default-features = false, features = [ "b
 bevy_mod_scripting = { version = "0.7.1", features = ["bevy_script_api", "lua_script_api", "luajit52", "mlua_macros"] }
 strum = { version = "0.26.3", features = ["derive", "strum_macros"] }
 ustr = "1.1.0"
+assert_approx_eq = "1.1.0"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
