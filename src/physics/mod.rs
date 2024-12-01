@@ -103,7 +103,7 @@ impl Plugin for PhysicsSimulationPlugin {
         let config = SimulationConfig::default();
         app.add_event::<TimelineEventRequest>()
             .insert_resource(Time::<Fixed>::from_hz(
-                config.ticks_per_second as f64 * config.time_dilation as f64
+                config.ticks_per_second as f64 * config.time_dilation as f64,
             ))
             .insert_resource(config)
             .add_systems(
@@ -121,7 +121,7 @@ impl Plugin for PhysicsSimulationPlugin {
 }
 
 // Increment current_tick when not paused
-fn update_simulation_time(mut sim_time: ResMut<SimulationState>) {
+fn update_simulation_time(mut sim_time: ResMut<SimulationConfig>) {
     if !sim_time.paused {
         sim_time.current_tick += 1;
         info!(tick = sim_time.current_tick, "Updated tick");
@@ -173,12 +173,12 @@ fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
     mut query: Query<(&PhysicsState, &mut Timeline)>,
 ) {
-    let seconds_per_tick = 1.0 / simulation_state.ticks_per_second as f32;
+    let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
 
     for (current_state, mut timeline) in query.iter_mut() {
         // If everything is up to date, skip
         if timeline.last_computed_tick
-            >= simulation_state.current_tick + PREDICTION_TICKS
+            >= simulation_config.current_tick + PREDICTION_TICKS
         {
             info!("Nothing to compute...");
             continue;
@@ -187,8 +187,8 @@ fn compute_future_states(
         // Start computation from the earliest invalid state
         let start_tick = timeline
             .last_computed_tick
-            .min(simulation_state.current_tick);
-        let mut state = if start_tick == simulation_state.current_tick {
+            .min(simulation_config.current_tick);
+        let mut state = if start_tick == simulation_config.current_tick {
             current_state.clone()
         } else {
             timeline
@@ -201,7 +201,7 @@ fn compute_future_states(
 
         // Compute future states up to PREDICTION_TICKS into the future
         for tick in
-            start_tick..=simulation_state.current_tick + PREDICTION_TICKS
+            start_tick..=simulation_config.current_tick + PREDICTION_TICKS
         {
             // Apply any control inputs that occur at this tick
             if let Some(event) =
@@ -222,8 +222,7 @@ fn compute_future_states(
             }
 
             // Integrate physics with time scale
-            state =
-                state.integrate(seconds_per_tick, simulation_state.time_scale);
+            state = state.integrate(seconds_per_tick);
 
             // Store the new state
             timeline.future_states.insert(tick, state.clone());
@@ -240,14 +239,14 @@ fn compute_future_states(
         // dbg!(future_pos);
 
         timeline.last_computed_tick =
-            simulation_state.current_tick + PREDICTION_TICKS;
+            simulation_config.current_tick + PREDICTION_TICKS;
     }
 }
 
 /// Update tranform and physics state from timeline
 fn sync_physics_state_transform(
     mut query: Query<(&mut Transform, &mut PhysicsState, &mut Timeline)>,
-    sim_state: Res<SimulationState>,
+    sim_state: Res<SimulationConfig>,
 ) {
     for (mut transform, mut phys_state, mut timeline) in query.iter_mut() {
         *phys_state = timeline
@@ -271,7 +270,7 @@ fn time_dilation_control(
     mut time: ResMut<Time<Fixed>>,
 ) {
     let mut changed = false;
-    
+
     if keys.just_pressed(KeyCode::BracketRight) {
         config.time_dilation *= 2.0;
         changed = true;
@@ -280,13 +279,13 @@ fn time_dilation_control(
         config.time_dilation *= 0.5;
         changed = true;
     }
-    
+
     if changed {
         time.set_timestep_hz(
-            config.ticks_per_second as f64 * config.time_dilation as f64
+            config.ticks_per_second as f64 * config.time_dilation as f64,
         );
         info!(
-            "Simulation speed: {:.1}x ({}Hz)", 
+            "Simulation speed: {:.1}x ({}Hz)",
             config.time_dilation,
             config.ticks_per_second as f64 * config.time_dilation as f64
         );
@@ -305,11 +304,7 @@ mod tests {
     fn create_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(SimulationState {
-                current_tick: 0,
-                paused: false,
-                ticks_per_second: 60,
-            })
+            .insert_resource(SimulationConfig::default())
             .add_systems(Update, compute_future_states);
         app
     }
