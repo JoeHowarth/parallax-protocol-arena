@@ -1,22 +1,24 @@
 //! Physics simulation module for predictive spacecraft movement
-//! 
+//!
 //! This module implements a specialized 2D physics system focused on:
 //! - Deterministic simulation for trajectory prediction
 //! - Timeline-based control inputs
 //! - Efficient state computation for visualization
-//! 
+//!
 //! The core components are:
 //! - `PhysicsState`: Current physical properties of an entity
 //! - `Timeline`: Scheduled control inputs and computed future states
 //! - `SimulationState`: Global simulation parameters and time control
 //!
 //! The simulation works by:
-//! 1. Storing control inputs (thrust, rotation, etc) with their activation ticks
+//! 1. Storing control inputs (thrust, rotation, etc) with their activation
+//!    ticks
 //! 2. Computing future physics states by integrating from the current state
 //! 3. Invalidating and recomputing states when new inputs are added
 //! 4. Synchronizing entity transforms with the current simulation tick
 
 use std::collections::{BTreeMap, VecDeque};
+
 use crate::prelude::*;
 
 /// Physical properties and control state of a simulated entity
@@ -66,7 +68,6 @@ pub struct Timeline {
     pub future_states: BTreeMap<u64, PhysicsState>,
     /// Last tick that has valid computed states
     pub events: Vec<TimelineEvent>,
-    pub future_states: BTreeMap<u64, PhysicsState>,
     pub last_computed_tick: u64,
 }
 
@@ -83,40 +84,39 @@ pub struct SimulationState {
     pub time_scale: f32,
 }
 
-/// Plugin that sets up the physics simulation systems
-pub struct PhysicsSimulationPlugin {
-    pub ticks_per_second: u64,
-}
-
-impl Default for PhysicsSimulationPlugin {
+impl Default for SimulationState {
     fn default() -> Self {
         Self {
+            current_tick: 0,
+            paused: false,
             ticks_per_second: 60,
+            time_scale: 1.,
         }
     }
 }
 
+/// Plugin that sets up the physics simulation systems
+pub struct PhysicsSimulationPlugin;
+
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(SimulationState {
-            current_tick: 0,
-            paused: false,
-            ticks_per_second: self.ticks_per_second,
-            time_scale: 1.0,
-        })
-        .add_event::<TimelineEventRequest>()
-        .insert_resource(Time::<Fixed>::from_hz(self.ticks_per_second as f64))
-        .add_systems(
-            FixedUpdate,
-            (
-                update_simulation_time,
-                process_timeline_events,
-                compute_future_states,
-                sync_physics_state_transform,
+        let sim_state = SimulationState::default();
+        app.add_event::<TimelineEventRequest>()
+            .insert_resource(Time::<Fixed>::from_hz(
+                sim_state.ticks_per_second as f64,
+            ))
+            .insert_resource(sim_state)
+            .add_systems(
+                FixedUpdate,
+                (
+                    update_simulation_time,
+                    process_timeline_events,
+                    compute_future_states,
+                    sync_physics_state_transform,
+                )
+                    .chain(),
             )
-                .chain(),
-        )
-        .add_systems(Update, time_scale_control);
+            .add_systems(Update, time_scale_control);
     }
 }
 
@@ -223,7 +223,8 @@ fn compute_future_states(
             }
 
             // Integrate physics with time scale
-            state = state.integrate(seconds_per_tick, simulation_state.time_scale);
+            state =
+                state.integrate(seconds_per_tick, simulation_state.time_scale);
 
             // Store the new state
             timeline.future_states.insert(tick, state.clone());
@@ -381,7 +382,7 @@ mod tests {
         assert_approx_eq!(next_state.position.x, 0.0, 1e-6); // Fixed: position doesn't change first frame
         assert_approx_eq!(next_state.position.y, 0.0, 1e-6);
 
-        // Let's verify position changes after a second integration step
+        // Let's verify position changek after a second integration step
         let third_state = next_state.integrate(delta);
         assert_approx_eq!(
             third_state.position.x,
