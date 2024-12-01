@@ -46,6 +46,7 @@ pub struct SimulationState {
     pub current_tick: u64,
     pub paused: bool,
     pub ticks_per_second: u64,
+    pub time_scale: f32,
 }
 
 /// **************************
@@ -71,6 +72,7 @@ impl Plugin for PhysicsSimulationPlugin {
             current_tick: 0,
             paused: false,
             ticks_per_second: self.ticks_per_second,
+            time_scale: 1.0,
         })
         .add_event::<TimelineEventRequest>()
         .insert_resource(Time::<Fixed>::from_hz(self.ticks_per_second as f64))
@@ -83,7 +85,8 @@ impl Plugin for PhysicsSimulationPlugin {
                 sync_physics_state_transform,
             )
                 .chain(),
-        );
+        )
+        .add_systems(Update, time_scale_control);
     }
 }
 
@@ -117,16 +120,17 @@ fn process_timeline_events(
 }
 
 impl PhysicsState {
-    fn integrate(&self, delta_seconds: f32) -> Self {
+    fn integrate(&self, delta_seconds: f32, time_scale: f32) -> Self {
+        let scaled_delta = delta_seconds * time_scale;
         let thrust_direction = Vec2::from_angle(self.rotation);
         let thrust_force =
             thrust_direction * (self.current_thrust * self.max_thrust);
         let acceleration = thrust_force / self.mass;
 
         PhysicsState {
-            position: self.position + self.velocity * delta_seconds,
-            velocity: self.velocity + acceleration * delta_seconds,
-            rotation: self.rotation + self.angular_velocity * delta_seconds,
+            position: self.position + self.velocity * scaled_delta,
+            velocity: self.velocity + acceleration * scaled_delta,
+            rotation: self.rotation + self.angular_velocity * scaled_delta,
             // Assuming no torque for now
             angular_velocity: self.angular_velocity,
             mass: self.mass,
@@ -188,8 +192,8 @@ fn compute_future_states(
                 }
             }
 
-            // Integrate physics
-            state = state.integrate(seconds_per_tick);
+            // Integrate physics with time scale
+            state = state.integrate(seconds_per_tick, simulation_state.time_scale);
 
             // Store the new state
             timeline.future_states.insert(tick, state.clone());
@@ -230,7 +234,18 @@ fn sync_physics_state_transform(
 
 // Constants
 const PREDICTION_TICKS: u64 = 120; // 2 seconds at 60 ticks/second
-                                   //
+
+fn time_scale_control(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut sim_state: ResMut<SimulationState>,
+) {
+    if keys.just_pressed(KeyCode::BracketRight) {
+        sim_state.time_scale *= 2.0;
+    }
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        sim_state.time_scale *= 0.5;
+    }
+}
 
 #[cfg(test)]
 mod tests {
