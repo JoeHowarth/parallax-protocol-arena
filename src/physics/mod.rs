@@ -1,8 +1,25 @@
-use std::collections::{BTreeMap, VecDeque};
+//! Physics simulation module for predictive spacecraft movement
+//! 
+//! This module implements a specialized 2D physics system focused on:
+//! - Deterministic simulation for trajectory prediction
+//! - Timeline-based control inputs
+//! - Efficient state computation for visualization
+//! 
+//! The core components are:
+//! - `PhysicsState`: Current physical properties of an entity
+//! - `Timeline`: Scheduled control inputs and computed future states
+//! - `SimulationState`: Global simulation parameters and time control
+//!
+//! The simulation works by:
+//! 1. Storing control inputs (thrust, rotation, etc) with their activation ticks
+//! 2. Computing future physics states by integrating from the current state
+//! 3. Invalidating and recomputing states when new inputs are added
+//! 4. Synchronizing entity transforms with the current simulation tick
 
+use std::collections::{BTreeMap, VecDeque};
 use crate::prelude::*;
 
-// Core physics state
+/// Physical properties and control state of a simulated entity
 #[derive(Component, Clone, Debug)]
 pub struct PhysicsState {
     pub position: Vec2,
@@ -21,39 +38,52 @@ pub struct TimelineEventRequest {
     pub event: TimelineEvent,
 }
 
+/// Control inputs that can be scheduled to modify entity behavior
 #[derive(Clone, Copy, Debug)]
 pub enum ControlInput {
+    /// Set thrust level between -1.0 and 1.0
     SetThrust(f32),
+    /// Set absolute rotation in radians
     SetRotation(f32),
+    /// Set angular velocity in radians/second
     SetAngVel(f32),
 }
 
+/// A scheduled control input at a specific simulation tick
 #[derive(Clone, Debug)]
 pub struct TimelineEvent {
+    /// Simulation tick when this input takes effect
     pub tick: u64,
+    /// The control input to apply
     pub input: ControlInput,
 }
 
+/// Stores scheduled inputs and computed future states for an entity
 #[derive(Component)]
 pub struct Timeline {
+    /// Ordered list of future control inputs
+    /// Computed physics states for future simulation ticks
+    pub future_states: BTreeMap<u64, PhysicsState>,
+    /// Last tick that has valid computed states
     pub events: Vec<TimelineEvent>,
     pub future_states: BTreeMap<u64, PhysicsState>,
     pub last_computed_tick: u64,
 }
 
+/// Global simulation parameters and time control
 #[derive(Resource)]
 pub struct SimulationState {
+    /// Current simulation tick
     pub current_tick: u64,
+    /// Whether simulation is paused
     pub paused: bool,
+    /// Number of simulation ticks per second
     pub ticks_per_second: u64,
+    /// Multiplier for simulation speed
     pub time_scale: f32,
 }
 
-/// **************************
-/// Physics simulation systems
-/// **************************
-
-// Plugin setup
+/// Plugin that sets up the physics simulation systems
 pub struct PhysicsSimulationPlugin {
     pub ticks_per_second: u64,
 }
