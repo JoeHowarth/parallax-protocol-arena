@@ -73,24 +73,24 @@ pub struct Timeline {
 
 /// Global simulation parameters and time control
 #[derive(Resource)]
-pub struct SimulationState {
+pub struct SimulationConfig {
     /// Current simulation tick
     pub current_tick: u64,
+    /// How many simulation ticks per virtual second
+    pub ticks_per_second: u64,
+    /// How many virtual seconds should pass per real second
+    pub time_dilation: f32,
     /// Whether simulation is paused
     pub paused: bool,
-    /// Number of simulation ticks per second
-    pub ticks_per_second: u64,
-    /// Multiplier for simulation speed
-    pub time_scale: f32,
 }
 
-impl Default for SimulationState {
+impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
             current_tick: 0,
-            paused: false,
             ticks_per_second: 60,
-            time_scale: 1.,
+            time_dilation: 1.0,
+            paused: false,
         }
     }
 }
@@ -100,12 +100,12 @@ pub struct PhysicsSimulationPlugin;
 
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
-        let sim_state = SimulationState::default();
+        let config = SimulationConfig::default();
         app.add_event::<TimelineEventRequest>()
             .insert_resource(Time::<Fixed>::from_hz(
-                sim_state.ticks_per_second as f64,
+                config.ticks_per_second as f64 * config.time_dilation as f64
             ))
-            .insert_resource(sim_state)
+            .insert_resource(config)
             .add_systems(
                 FixedUpdate,
                 (
@@ -116,7 +116,7 @@ impl Plugin for PhysicsSimulationPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, time_scale_control);
+            .add_systems(Update, time_dilation_control);
     }
 }
 
@@ -150,17 +150,16 @@ fn process_timeline_events(
 }
 
 impl PhysicsState {
-    fn integrate(&self, delta_seconds: f32, time_scale: f32) -> Self {
-        let scaled_delta = delta_seconds * time_scale;
+    fn integrate(&self, delta_seconds: f32) -> Self {
         let thrust_direction = Vec2::from_angle(self.rotation);
         let thrust_force =
             thrust_direction * (self.current_thrust * self.max_thrust);
         let acceleration = thrust_force / self.mass;
 
         PhysicsState {
-            position: self.position + self.velocity * scaled_delta,
-            velocity: self.velocity + acceleration * scaled_delta,
-            rotation: self.rotation + self.angular_velocity * scaled_delta,
+            position: self.position + self.velocity * delta_seconds,
+            velocity: self.velocity + acceleration * delta_seconds,
+            rotation: self.rotation + self.angular_velocity * delta_seconds,
             // Assuming no torque for now
             angular_velocity: self.angular_velocity,
             mass: self.mass,
@@ -171,7 +170,7 @@ impl PhysicsState {
 }
 
 fn compute_future_states(
-    simulation_state: Res<SimulationState>,
+    simulation_config: Res<SimulationConfig>,
     mut query: Query<(&PhysicsState, &mut Timeline)>,
 ) {
     let seconds_per_tick = 1.0 / simulation_state.ticks_per_second as f32;
@@ -266,15 +265,31 @@ fn sync_physics_state_transform(
 // Constants
 const PREDICTION_TICKS: u64 = 120; // 2 seconds at 60 ticks/second
 
-fn time_scale_control(
+fn time_dilation_control(
     keys: Res<ButtonInput<KeyCode>>,
-    mut sim_state: ResMut<SimulationState>,
+    mut config: ResMut<SimulationConfig>,
+    mut time: ResMut<Time<Fixed>>,
 ) {
+    let mut changed = false;
+    
     if keys.just_pressed(KeyCode::BracketRight) {
-        sim_state.time_scale *= 2.0;
+        config.time_dilation *= 2.0;
+        changed = true;
     }
     if keys.just_pressed(KeyCode::BracketLeft) {
-        sim_state.time_scale *= 0.5;
+        config.time_dilation *= 0.5;
+        changed = true;
+    }
+    
+    if changed {
+        time.set_timestep_hz(
+            config.ticks_per_second as f64 * config.time_dilation as f64
+        );
+        info!(
+            "Simulation speed: {:.1}x ({}Hz)", 
+            config.time_dilation,
+            config.ticks_per_second as f64 * config.time_dilation as f64
+        );
     }
 }
 
