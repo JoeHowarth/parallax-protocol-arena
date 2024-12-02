@@ -72,7 +72,7 @@ pub struct Timeline {
 }
 
 /// Global simulation parameters and time control
-#[derive(Resource)]
+#[derive(Resource, Clone, Debug)]
 pub struct SimulationConfig {
     /// Current simulation tick
     pub current_tick: u64,
@@ -96,16 +96,9 @@ impl Default for SimulationConfig {
 }
 
 /// Plugin that sets up the physics simulation systems
+#[derive(Clone, Default, Debug)]
 pub struct PhysicsSimulationPlugin {
     pub config: SimulationConfig,
-}
-
-impl Default for PhysicsSimulationPlugin {
-    fn default() -> Self {
-        Self {
-            config: SimulationConfig::default(),
-        }
-    }
 }
 
 impl Plugin for PhysicsSimulationPlugin {
@@ -113,7 +106,8 @@ impl Plugin for PhysicsSimulationPlugin {
         app.add_event::<TimelineEventRequest>()
             .insert_resource(self.config.clone())
             .insert_resource(Time::<Fixed>::from_hz(
-                self.config.ticks_per_second as f64 * self.config.time_dilation as f64,
+                self.config.ticks_per_second as f64
+                    * self.config.time_dilation as f64,
             ))
             .add_systems(
                 FixedUpdate,
@@ -219,10 +213,11 @@ fn compute_future_states(
                 // info!(?event, "Found event");
                 match event.input {
                     ControlInput::SetThrust(thrust) => {
-                        state.current_thrust = thrust
+                        state.current_thrust = thrust;
                     }
                     ControlInput::SetRotation(rotation) => {
-                        state.rotation = rotation
+                        state.rotation = rotation;
+                        state.angular_velocity = 0.;
                     }
                     ControlInput::SetAngVel(ang_vel) => {
                         state.angular_velocity = ang_vel;

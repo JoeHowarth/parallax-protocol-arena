@@ -4,7 +4,6 @@ use bevy::{
     color::palettes::css,
     utils::{HashMap, HashSet},
 };
-use crate::utils::{screen_dir_to_world, screen_to_world, world_to_screen};
 use bevy_mod_picking::{
     debug::DebugPickingMode,
     prelude::*,
@@ -12,6 +11,8 @@ use bevy_mod_picking::{
     PickableBundle,
 };
 use parallax_protocol_arena::{physics::*, prelude::*};
+
+use crate::utils::{screen_dir_to_world, screen_to_world, world_to_screen};
 
 fn main() {
     App::new()
@@ -46,9 +47,9 @@ fn main() {
                 exit_system,
                 (
                     (handle_trajectory_clicks, handle_engine_input),
-                    update_segment_visuals,
                     update_event_markers,
-                    update_trajectory_segments,
+                    (update_trajectory_segments, update_segment_visuals)
+                        .chain(),
                 )
                     .chain(),
             ),
@@ -69,7 +70,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         Camera2dBundle::default(),
         bevy_pancam::PanCam {
-            move_keys: bevy_pancam::DirectionKeys::NONE,
+            move_keys: bevy_pancam::DirectionKeys::arrows(),
+            grab_buttons: vec![MouseButton::Right],
             ..default()
         },
     ));
@@ -192,7 +194,7 @@ fn update_event_markers(
 
             let (color, shaft_length, rotation) = match event.input {
                 ControlInput::SetThrust(thrust) => {
-                    let magnitude = (thrust.abs() * 20.0).max(20.0);
+                    let magnitude = (thrust.abs() * 50.0).min(50.0);
                     (
                         Color::srgba(1.0, 0.0, 0.0, 0.8),
                         magnitude,
@@ -203,7 +205,7 @@ fn update_event_markers(
                     (Color::srgba(0.0, 1.0, 0.0, 0.8), 20.0, _rotation)
                 }
                 ControlInput::SetAngVel(ang_vel) => {
-                    let magnitude = (ang_vel.abs() * 8.0).max(20.0);
+                    let magnitude = (ang_vel.abs() * 8.0).min(20.0);
                     (
                         Color::srgba(0.0, 0.0, 1.0, 0.8),
                         magnitude,
@@ -401,7 +403,8 @@ fn update_trajectory_segments(
 
                 transform.translation = Vec3::from2(center_pos);
                 transform.rotation = Quat::from_rotation_z(angle);
-                sprite.custom_size = Some(Vec2::new(length, 2.0));
+
+                sprite.custom_size.as_mut().unwrap().x = length;
                 // Create new segment if we don't have enough
             }
         }
@@ -488,7 +491,7 @@ fn handle_engine_input(
             event: TimelineEvent {
                 tick: seg.end_tick,
                 input: ControlInput::SetThrust(
-                    (world_drag.length() / 20.).min(1.),
+                    (world_drag.length() / 50.).min(1.),
                 ),
             },
         });
@@ -505,13 +508,14 @@ fn update_segment_visuals(
             continue;
         };
         sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.5);
-        sprite.custom_size.unwrap().y = 3.;
+        sprite.custom_size.as_mut().unwrap().y = 2.0;
     }
+
     for e in over.read() {
         let Ok(mut sprite) = query.get_mut(e.target) else {
             continue;
         };
         sprite.color = Color::srgba(1.0, 1.0, 1.0, 1.0);
-        sprite.custom_size.unwrap().y = 2.;
+        sprite.custom_size.as_mut().unwrap().y = 5.0;
     }
 }
