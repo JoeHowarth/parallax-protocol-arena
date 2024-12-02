@@ -1,7 +1,12 @@
 use std::collections::BTreeMap;
 
+use bevy::{
+    color::palettes::css,
+    utils::{HashMap, HashSet},
+};
 use bevy_mod_picking::{
     debug::DebugPickingMode,
+    prelude::*,
     DefaultPickingPlugins,
     PickableBundle,
 };
@@ -25,8 +30,8 @@ fn main() {
         ))
         .add_plugins(PhysicsSimulationPlugin {
             config: SimulationConfig {
-                ticks_per_second: 5,
-                time_dilation: 3.,
+                ticks_per_second: 10,
+                time_dilation: 1.0,
                 ..default()
             },
         })
@@ -39,7 +44,7 @@ fn main() {
             (
                 exit_system,
                 (
-                    handle_trajectory_clicks,
+                    (handle_trajectory_clicks, handle_engine_input),
                     update_segment_visuals,
                     update_event_markers,
                     update_trajectory_segments,
@@ -120,23 +125,23 @@ pub fn ship_bundle(
                     input: ControlInput::SetThrust(1.),
                 },
                 TimelineEvent {
-                    tick: 10,
+                    tick: 20,
                     input: ControlInput::SetThrust(0.),
                 },
                 TimelineEvent {
-                    tick: 30,
+                    tick: 60,
                     input: ControlInput::SetRotation(PI),
                 },
                 TimelineEvent {
-                    tick: 31,
+                    tick: 61,
                     input: ControlInput::SetAngVel(0.1),
                 },
                 TimelineEvent {
-                    tick: 35,
+                    tick: 65,
                     input: ControlInput::SetThrust(1.),
                 },
                 TimelineEvent {
-                    tick: 40,
+                    tick: 80,
                     input: ControlInput::SetThrust(0.1),
                 },
             ],
@@ -145,47 +150,6 @@ pub fn ship_bundle(
         },
     )
 }
-
-// Add trajectory visualization system
-// fn update_trajectory_lines(
-//     mut commands: Commands,
-//     query: Query<(Entity, &Timeline)>,
-//     mut gizmos: Gizmos,
-// ) {
-//     for (_entity, timeline) in query.iter() {
-//         let positions = timeline
-//             .future_states
-//             .iter()
-//             .map(|(tick, state)| (tick, state.position))
-//             .collect::<Vec<_>>();
-//         // positions.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
-//
-//         // Draw the trajectory line
-//         if positions.len() >= 2 {
-//             for positions in positions.windows(2) {
-//                 commands.spawn(
-//                  TrajectorySegmentBundle {
-//                     sprite_bundle: todo!(),
-//                     segment: todo!(),
-//                     pickable: todo!(),
-//                 }
-//                 );
-//
-//                 gizmos.line_2d(
-//                     positions[0].1,
-//                     positions[1].1,
-//                     Color::srgba(1.0, 1.0, 1.0, 0.5),
-//                 );
-//             }
-//         }
-//     }
-// }
-
-use bevy::{
-    prelude::*,
-    utils::{HashMap, HashSet},
-};
-use bevy_mod_picking::prelude::*;
 
 #[derive(Component)]
 struct TimelineEventMarker {
@@ -329,6 +293,7 @@ fn update_event_markers(
 
 #[derive(Component)]
 struct TrajectorySegment {
+    craft_entity: Entity,
     start_tick: u64,
     end_tick: u64,
     start_pos: Vec2,
@@ -358,7 +323,7 @@ fn update_trajectory_segments(
     mut segments_map: Local<HashMap<(Entity, u64), Entity>>,
 ) {
     let mut used_keys = HashSet::with_capacity(segments_map.len());
-    for (_entity, timeline) in query.iter() {
+    for (craft_entity, timeline) in query.iter() {
         let positions = timeline
             .future_states
             .iter()
@@ -376,11 +341,12 @@ fn update_trajectory_segments(
 
                 let center_pos = (start_pos + end_pos) / 2.0;
 
-                used_keys.insert((_entity, start_tick));
-                let Some(seg_ent) = segments_map.get(&(_entity, start_tick))
+                used_keys.insert((craft_entity, start_tick));
+                let Some(seg_ent) =
+                    segments_map.get(&(craft_entity, start_tick))
                 else {
                     segments_map.insert(
-                        (_entity, start_tick),
+                        (craft_entity, start_tick),
                         commands
                             .spawn((
                                 TrajectorySegmentBundle {
@@ -403,6 +369,7 @@ fn update_trajectory_segments(
                                         ..default()
                                     },
                                     segment: TrajectorySegment {
+                                        craft_entity,
                                         start_tick,
                                         end_tick,
                                         start_pos,
@@ -481,10 +448,48 @@ fn handle_trajectory_clicks(
 }
 
 fn handle_engine_input(
-    mut drag_start: EventReader<Pointer<DragStart>>,
-    mut drag_end: EventReader<Pointer<DragEnd>>,
-    // mut query: Query<(&mut Sprite, With<TrajectorySegment>>,
+    mut drag_start_r: EventReader<Pointer<DragStart>>,
+    mut drag_end_r: EventReader<Pointer<DragEnd>>,
+    segments: Query<&TrajectorySegment>,
+    mut timeline_event_writer: EventWriter<TimelineEventRequest>,
+    mut drags: Local<HashMap<Entity, Pointer<DragStart>>>,
+    mut gizmos: Gizmos,
 ) {
+    for drag_start in drag_start_r.read() {
+        let seg = segments.get(drag_start.target).unwrap();
+        drags.insert(seg.craft_entity, drag_start.clone());
+        info!(pos = ?drag_start.pointer_location.position, "Drag start");
+    }
+    for drag_end in drag_end_r.read() {
+        let seg = segments.get(drag_end.target).unwrap();
+        let Some(drag_start) = drags.remove(&seg.craft_entity) else {
+            warn!("drag ended but entity not in drags map");
+            continue;
+        };
+        let start_pos = drag_start.pointer_location.position;
+        let end_pos = drag_end.pointer_location.position;
+        let drag_vec = end_pos - start_pos;
+
+        gizmos.line_2d(start_pos, end_pos, css::SEASHELL);
+
+        info!(pos = ?drag_end.pointer_location.position, ?drag_vec, len = drag_vec.length(), angle = drag_vec.to_angle(), "Drag end");
+        timeline_event_writer.send(TimelineEventRequest {
+            entity: seg.craft_entity,
+            event: TimelineEvent {
+                tick: seg.end_tick,
+                input: ControlInput::SetRotation(drag_vec.to_angle()),
+            },
+        });
+        timeline_event_writer.send(TimelineEventRequest {
+            entity: seg.craft_entity,
+            event: TimelineEvent {
+                tick: seg.end_tick,
+                input: ControlInput::SetThrust(
+                    (drag_vec.length() / 20.).min(1.),
+                ),
+            },
+        });
+    }
 }
 
 fn update_segment_visuals(
@@ -497,11 +502,13 @@ fn update_segment_visuals(
             continue;
         };
         sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.5);
+        sprite.custom_size.unwrap().y = 3.;
     }
     for e in over.read() {
         let Ok(mut sprite) = query.get_mut(e.target) else {
             continue;
         };
         sprite.color = Color::srgba(1.0, 1.0, 1.0, 1.0);
+        sprite.custom_size.unwrap().y = 2.;
     }
 }
