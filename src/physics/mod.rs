@@ -17,7 +17,7 @@
 //! 3. Invalidating and recomputing states when new inputs are added
 //! 4. Synchronizing entity transforms with the current simulation tick
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use crate::prelude::*;
 
@@ -93,6 +93,13 @@ impl Default for SimulationConfig {
             paused: false,
         }
     }
+}
+
+#[derive(Resource)]
+pub struct TrajectoryPreview {
+    pub entity: Entity,
+    pub start_tick: u64,
+    pub timeline: Timeline,
 }
 
 /// Plugin that sets up the physics simulation systems

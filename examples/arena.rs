@@ -455,21 +455,32 @@ fn handle_engine_input(
     mut drag_start_r: EventReader<Pointer<DragStart>>,
     mut drag_end_r: EventReader<Pointer<DragEnd>>,
     segments: Query<&TrajectorySegment>,
+    timelines: Query<&Timeline>,
     mut timeline_event_writer: EventWriter<TimelineEventRequest>,
-    mut drags: Local<HashMap<Entity, Pointer<DragStart>>>,
+    mut commands: Commands,
     mut gizmos: Gizmos,
+    sim_config: Res<SimulationConfig>,
 ) {
     for drag_start in drag_start_r.read() {
         let seg = segments.get(drag_start.target).unwrap();
-        drags.insert(seg.craft_entity, drag_start.clone());
+        let timeline = timelines.get(seg.craft_entity).unwrap();
+        
+        // Create preview timeline starting from segment's end tick
+        commands.insert_resource(TrajectoryPreview {
+            entity: seg.craft_entity,
+            start_tick: seg.end_tick,
+            timeline: Timeline {
+                events: timeline.events.clone(),
+                future_states: BTreeMap::new(),
+                last_computed_tick: seg.end_tick,
+            },
+        });
+        
         info!(pos = ?drag_start.pointer_location.position, "Drag start");
     }
+
     for drag_end in drag_end_r.read() {
         let seg = segments.get(drag_end.target).unwrap();
-        let Some(drag_start) = drags.remove(&seg.craft_entity) else {
-            warn!("drag ended but entity not in drags map");
-            continue;
-        };
         let start_pos = drag_start.pointer_location.position;
         let end_pos = drag_end.pointer_location.position;
         let screen_drag = end_pos - start_pos;
@@ -479,6 +490,8 @@ fn handle_engine_input(
         gizmos.line_2d(start_pos, end_pos, css::SEASHELL);
 
         info!(pos = ?end_pos, ?world_drag, len = world_drag.length(), angle = world_drag.to_angle(), "Drag end");
+        
+        // Send the actual timeline events
         timeline_event_writer.send(TimelineEventRequest {
             entity: seg.craft_entity,
             event: TimelineEvent {
@@ -495,6 +508,9 @@ fn handle_engine_input(
                 ),
             },
         });
+
+        // Remove preview
+        commands.remove_resource::<TrajectoryPreview>();
     }
 }
 
