@@ -4,18 +4,13 @@ use bevy::prelude::Vec2;
 /// Screen: (0,0) at top-left, +y down
 /// World: (0,0) at center, +y up
 pub fn screen_to_world(screen_pos: Vec2) -> Vec2 {
-    Vec2::new(screen_pos.x, -screen_pos.y)  // Just flip y for now
+    Vec2::new(screen_pos.x, -screen_pos.y) // Just flip y for now
 }
 
 /// Convert world coordinates to screen coordinates
 pub fn world_to_screen(world_pos: Vec2) -> Vec2 {
-    Vec2::new(world_pos.x, -world_pos.y)  // Same operation, just documenting intent
-}
-
-/// Convert a direction vector from screen to world space
-/// This only flips the y component since it's a relative vector
-pub fn screen_dir_to_world(screen_dir: Vec2) -> Vec2 {
-    Vec2::new(screen_dir.x, -screen_dir.y)
+    Vec2::new(world_pos.x, -world_pos.y) // Same operation, just documenting
+                                         // intent
 }
 
 /// Calculate intersection point of a ray originating inside an AABB

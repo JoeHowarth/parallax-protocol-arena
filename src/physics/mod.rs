@@ -36,8 +36,12 @@ pub struct PhysicsState {
 
 #[derive(Event, Debug)]
 pub struct TimelineEventRequest {
+    /// Entity to apply to
     pub entity: Entity,
-    pub event: TimelineEvent,
+    /// Simulation tick when this input takes effect
+    pub tick: u64,
+    /// The control input to apply
+    pub input: ControlInput,
 }
 
 /// Control inputs that can be scheduled to modify entity behavior
@@ -49,25 +53,17 @@ pub enum ControlInput {
     SetRotation(f32),
     /// Set angular velocity in radians/second
     SetAngVel(f32),
-}
-
-/// A scheduled control input at a specific simulation tick
-#[derive(Clone, Debug)]
-pub struct TimelineEvent {
-    /// Simulation tick when this input takes effect
-    pub tick: u64,
-    /// The control input to apply
-    pub input: ControlInput,
+    SetThrustAndRotation(f32, f32),
 }
 
 /// Stores scheduled inputs and computed future states for an entity
 #[derive(Component)]
 pub struct Timeline {
-    /// Ordered list of future control inputs
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
+    /// Ordered list of future control inputs
+    pub events: BTreeMap<u64, ControlInput>,
     /// Last tick that has valid computed states
-    pub events: Vec<TimelineEvent>,
     pub last_computed_tick: u64,
 }
 
@@ -87,7 +83,7 @@ pub struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            current_tick: 0,
+            current_tick: 1,
             ticks_per_second: 60,
             time_dilation: 1.0,
             paused: false,
@@ -119,10 +115,10 @@ impl Plugin for PhysicsSimulationPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    update_simulation_time,
                     process_timeline_events,
                     compute_future_states,
                     sync_physics_state_transform,
+                    update_simulation_time,
                 )
                     .chain(),
             )
@@ -145,17 +141,27 @@ fn process_timeline_events(
     mut timeline_events: EventReader<TimelineEventRequest>,
     mut timelines: Query<&mut Timeline>,
 ) {
-    for TimelineEventRequest { event, entity } in timeline_events.read() {
-        info!(?event, ?entity, "Got timeline event request");
+    for TimelineEventRequest {
+        tick,
+        input,
+        entity,
+    } in timeline_events.read()
+    {
+        info!(?tick, ?input, ?entity, "Got timeline event request");
         let Ok(mut timeline) = timelines.get_mut(*entity) else {
             warn!("Timeline component for given request");
             continue;
         };
         // just insert with binary search in the future
-        timeline.events.push(event.clone());
-        timeline.events.sort_by_key(|e| e.tick);
-        timeline.last_computed_tick =
-            timeline.last_computed_tick.min(event.tick);
+        let prev_last_computed_tick = timeline.last_computed_tick;
+        timeline.last_computed_tick = timeline.last_computed_tick.min(*tick);
+        timeline.events.insert(*tick, *input);
+
+        info!(
+            prev_last_computed_tick,
+            last_computed_tick = timeline.last_computed_tick,
+            "processing timeline event"
+        );
     }
 }
 
@@ -181,53 +187,43 @@ impl PhysicsState {
 
 fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
-    mut query: Query<(&PhysicsState, &mut Timeline)>,
+    mut query: Query<&mut Timeline>,
 ) {
     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
 
-    for (current_state, mut timeline) in query.iter_mut() {
-        // If everything is up to date, skip
-        if timeline.last_computed_tick
-            >= simulation_config.current_tick + PREDICTION_TICKS
-        {
-            info!("Nothing to compute...");
-            continue;
-        }
+    for mut timeline in query.iter_mut() {
+        timeline.lookahead(simulation_config.current_tick, seconds_per_tick);
+    }
+}
 
+impl Timeline {
+    pub fn lookahead(&mut self, current_tick: u64, seconds_per_tick: f32) {
         // Start computation from the earliest invalid state
-        let start_tick = timeline
-            .last_computed_tick
-            .min(simulation_config.current_tick);
-        let mut state = if start_tick == simulation_config.current_tick {
-            current_state.clone()
-        } else {
-            timeline
-                .future_states
-                .get(&start_tick)
-                .cloned()
-                .unwrap_or_else(|| current_state.clone())
-        };
-        // info!(start_tick, ?state, "Computing future states");
+        let start_tick = self.last_computed_tick.max(current_tick + 1);
+        let end_tick = current_tick + PREDICTION_TICKS;
 
-        // Compute future states up to PREDICTION_TICKS into the future
-        for tick in
-            start_tick..=simulation_config.current_tick + PREDICTION_TICKS
-        {
+        let mut state =
+            self.future_states.get(&(start_tick - 1)).unwrap().clone();
+
+        for tick in start_tick..=end_tick {
             // Apply any control inputs that occur at this tick
-            if let Some(event) =
-                timeline.events.iter().find(|event| event.tick == tick)
-            {
-                // info!(?event, "Found event");
-                match event.input {
+            if let Some(input) = self.events.get(&tick) {
+                info!(?input, tick, ?state, "Found input");
+                match input {
                     ControlInput::SetThrust(thrust) => {
-                        state.current_thrust = thrust;
+                        state.current_thrust = *thrust;
                     }
                     ControlInput::SetRotation(rotation) => {
-                        state.rotation = rotation;
+                        state.rotation = *rotation;
+                        state.angular_velocity = 0.;
+                    }
+                    ControlInput::SetThrustAndRotation(thrust, rotation) => {
+                        state.current_thrust = *thrust;
+                        state.rotation = *rotation;
                         state.angular_velocity = 0.;
                     }
                     ControlInput::SetAngVel(ang_vel) => {
-                        state.angular_velocity = ang_vel;
+                        state.angular_velocity = *ang_vel;
                     }
                 }
             }
@@ -236,21 +232,10 @@ fn compute_future_states(
             state = state.integrate(seconds_per_tick);
 
             // Store the new state
-            timeline.future_states.insert(tick, state.clone());
+            self.future_states.insert(tick, state.clone());
         }
 
-        let mut future_pos = timeline
-            .future_states
-            .iter()
-            .map(|(t, s)| (t, s.position))
-            .collect::<Vec<_>>();
-        future_pos.sort_by_key(|x| x.0);
-        let future_pos = &future_pos[0..5];
-        // info!(?future_pos, "future positions");
-        // dbg!(future_pos);
-
-        timeline.last_computed_tick =
-            simulation_config.current_tick + PREDICTION_TICKS;
+        self.last_computed_tick = end_tick;
     }
 }
 
@@ -423,17 +408,20 @@ mod tests {
         let mut app = create_test_app();
 
         // Spawn an entity with physics components
+
+        let state = create_test_physics_state();
+        let mut future_states = BTreeMap::new();
+        future_states.insert(1, state.clone());
         let entity = app
             .world_mut()
             .spawn((
-                create_test_physics_state(),
+                state,
                 Timeline {
-                    events: vec![TimelineEvent {
-                        tick: 30,
-                        input: ControlInput::SetThrust(1.0),
-                    }],
-                    future_states: BTreeMap::new(),
-                    last_computed_tick: 0,
+                    events: BTreeMap::from_iter(
+                        [(30, ControlInput::SetThrust(1.0))].into_iter(),
+                    ),
+                    future_states,
+                    last_computed_tick: 1,
                 },
             ))
             .id();
@@ -450,7 +438,7 @@ mod tests {
 
         // Verify states were computed
         assert!(!timeline.future_states.is_empty());
-        assert_eq!(timeline.last_computed_tick, PREDICTION_TICKS);
+        assert_eq!(timeline.last_computed_tick, 1 + PREDICTION_TICKS);
 
         // Check that thrust was applied at the correct tick
         let state_before = timeline
@@ -480,25 +468,28 @@ mod tests {
         let mut app = create_test_app();
 
         // Set up entity with multiple control inputs
+        let state = create_test_physics_state();
+        let mut future_states = BTreeMap::new();
+        future_states.insert(1, state.clone());
         let entity = app
             .world_mut()
             .spawn((
-                create_test_physics_state(),
+                state,
                 Timeline {
-                    events: vec![
-                        TimelineEvent {
-                            tick: 10,
-                            input: ControlInput::SetThrust(1.0),
-                        },
-                        TimelineEvent {
-                            tick: 20,
-                            input: ControlInput::SetRotation(
-                                std::f32::consts::FRAC_PI_2,
+                    events: BTreeMap::from_iter(
+                        [
+                            (10, ControlInput::SetThrust(1.0)),
+                            (
+                                20,
+                                ControlInput::SetRotation(
+                                    std::f32::consts::FRAC_PI_2,
+                                ),
                             ),
-                        },
-                    ],
-                    future_states: BTreeMap::new(),
-                    last_computed_tick: 0,
+                        ]
+                        .into_iter(),
+                    ),
+                    future_states,
+                    last_computed_tick: 1,
                 },
             ))
             .id();
