@@ -4,6 +4,7 @@ use bevy::{
     color::palettes::css,
     utils::{HashMap, HashSet},
 };
+use crate::utils::{screen_dir_to_world, screen_to_world, world_to_screen};
 use bevy_mod_picking::{
     debug::DebugPickingMode,
     prelude::*,
@@ -468,16 +469,18 @@ fn handle_engine_input(
         };
         let start_pos = drag_start.pointer_location.position;
         let end_pos = drag_end.pointer_location.position;
-        let drag_vec = end_pos - start_pos;
+        let screen_drag = end_pos - start_pos;
+        let world_drag = screen_dir_to_world(screen_drag);
 
+        // Draw debug line in screen space
         gizmos.line_2d(start_pos, end_pos, css::SEASHELL);
 
-        info!(pos = ?drag_end.pointer_location.position, ?drag_vec, len = drag_vec.length(), angle = drag_vec.to_angle(), "Drag end");
+        info!(pos = ?end_pos, ?world_drag, len = world_drag.length(), angle = world_drag.to_angle(), "Drag end");
         timeline_event_writer.send(TimelineEventRequest {
             entity: seg.craft_entity,
             event: TimelineEvent {
                 tick: seg.end_tick,
-                input: ControlInput::SetRotation(drag_vec.to_angle()),
+                input: ControlInput::SetRotation(world_drag.to_angle()),
             },
         });
         timeline_event_writer.send(TimelineEventRequest {
@@ -485,7 +488,7 @@ fn handle_engine_input(
             event: TimelineEvent {
                 tick: seg.end_tick,
                 input: ControlInput::SetThrust(
-                    (drag_vec.length() / 20.).min(1.),
+                    (world_drag.length() / 20.).min(1.),
                 ),
             },
         });
