@@ -23,70 +23,14 @@ pub struct MissilePlugin;
 
 impl Plugin for MissilePlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<FireMissile>()
-            .add_systems(
-                FixedUpdate,
-                (
-                    handle_fire_missile,
-                    update_missiles,
-                    handle_missile_collision,
-                ),
-            )
-            .add_lua_provider(MissilePlugin);
-    }
-}
-
-impl LuaProvider for MissilePlugin {
-    fn attach_lua_api(&mut self, lua: &mut Lua) -> mlua::Result<()> {
-        let table = lua.create_table()?;
-        table.set(
-            "can_fire",
-            lua.create_function(|lua, _: Value| {
-                let world = lua.get_world()?;
-                let world = world.read();
-
-                let from =
-                    lua.globals().get::<_, LuaEntity>("entity")?.inner()?;
-                Ok(can_fire_world(&world, from))
-            })?,
-        )?;
-        table.set(
-            "fire",
-            lua.create_function(
-                |lua, (this, target): (LuaTable, LuaEntity)| {
-                    // retrieve the world pointer
-                    let world = lua.get_world()?;
-                    let mut world = world.write();
-
-                    let from =
-                        lua.globals().get::<_, LuaEntity>("entity")?.inner()?;
-
-                    // check if we can fire
-                    if !can_fire_world(&world, from) {
-                        return Ok(false);
-                    }
-
-                    let mut events: Mut<Events<FireMissile>> =
-                        world.get_resource_mut().unwrap();
-                    events.send(FireMissile {
-                        from,
-                        target: target.inner()?,
-                    });
-
-                    Ok(true)
-                },
-            )?,
-        )?;
-
-        lua.globals().set("missiles", table)
-    }
-
-    fn setup_lua_script(
-        &mut self,
-        sd: &ScriptData,
-        ctx: &mut Lua,
-    ) -> mlua::Result<()> {
-        Ok(())
+        app.add_event::<FireMissile>().add_systems(
+            FixedUpdate,
+            (
+                handle_fire_missile,
+                update_missiles,
+                handle_missile_collision,
+            ),
+        );
     }
 }
 

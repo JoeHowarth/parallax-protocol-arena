@@ -1,7 +1,5 @@
 use std::f32::consts::PI;
 
-use engines::Engines;
-
 use crate::prelude::*;
 
 #[derive(Component, Reflect, Debug)]
@@ -16,30 +14,30 @@ impl Plugin for PlasmaDronePlugin {
 }
 
 impl PlasmaDrone {
-    pub fn bundle(
-        asset_server: &AssetServer,
-        loc: Vec2,
-        faction: Faction,
-    ) -> impl Bundle {
-        let radius = 10.;
-        let px = 32.;
-        let color = Color::srgb(0.0, 1.0, 0.1);
-        (
-            PlasmaDrone,
-            Health(20.),
-            Engines {
-                max_accel: 100.0,
-                max_rot: PI / 12.,
-            },
-            CraftKind::PlasmaDrone,
-            ship_bundle(
-                "circle-32.png",
-                radius,
-                px,
-                faction,
-                loc,
-                asset_server,
-            ),
-        )
-    }
+    // pub fn bundle(
+    //     asset_server: &AssetServer,
+    //     loc: Vec2,
+    //     faction: Faction,
+    // ) -> impl Bundle {
+    //     let radius = 10.;
+    //     let px = 32.;
+    //     let color = Color::srgb(0.0, 1.0, 0.1);
+    //     (
+    //         PlasmaDrone,
+    //         Health(20.),
+    //         Engines {
+    //             max_accel: 100.0,
+    //             max_rot: PI / 12.,
+    //         },
+    //         CraftKind::PlasmaDrone,
+    //         ship_bundle(
+    //             "circle-32.png",
+    //             radius,
+    //             px,
+    //             faction,
+    //             loc,
+    //             asset_server,
+    //         ),
+    //     )
+    // }
 }

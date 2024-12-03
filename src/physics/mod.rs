@@ -167,6 +167,7 @@ fn process_timeline_events(
 
 impl PhysicsState {
     fn integrate(&self, delta_seconds: f32) -> Self {
+        // TODO: replace this with rk4 integration method to reduce errors
         let thrust_direction = Vec2::from_angle(self.rotation);
         let thrust_force =
             thrust_direction * (self.current_thrust * self.max_thrust);

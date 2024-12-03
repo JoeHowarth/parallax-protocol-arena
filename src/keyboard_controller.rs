@@ -93,20 +93,6 @@ fn update(
 
     let kind = crafts.get(e).unwrap();
 
-    if keys.just_pressed(KeyCode::KeyC) {
-        info!("Pressed C, taking manual control of flight");
-        commands
-            .entity(e)
-            .insert(KeyboardFlightController)
-            .remove::<FlightController>()
-            .remove::<LuaFlightController>();
-    }
-
-    if keys.just_pressed(KeyCode::KeyB) {
-        info!("Pressed B, toggling craft scripts");
-        commands.add(toggle_lua_hooks(e));
-    }
-
     if matches!(*state, SelectionState::Target(..)) {
         if keys.just_pressed(KeyCode::Escape) {
             info!("Clearing target selection state");

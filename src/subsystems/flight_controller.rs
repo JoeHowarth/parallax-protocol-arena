@@ -4,18 +4,8 @@ use std::{
 };
 
 use bevy::time::Stopwatch;
-use engines::Engines;
 
 use crate::prelude::*;
-
-#[derive(Component, Reflect, Debug, Deref)]
-pub struct FlightControllerTarget(pub Vec2);
-
-#[derive(Component, Reflect, Debug)]
-pub struct FlightController;
-
-#[derive(Component, Reflect, Debug)]
-pub struct LuaFlightController;
 
 #[derive(Component, Reflect, Debug)]
 pub struct KeyboardFlightController;
@@ -24,30 +14,10 @@ pub struct FlightControllerPlugin;
 
 impl Plugin for FlightControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<FlightController>()
-            .register_type::<LuaFlightController>()
-            .register_type::<KeyboardFlightController>()
-            .add_systems(
-                FixedUpdate,
-                (flight_controller, keyboard_flight_controller),
-            );
-    }
-}
-
-impl LuaProvider for LuaFlightController {
-    fn attach_lua_api(&mut self, lua: &mut Lua) -> mlua::Result<()> {
-        Ok(())
-    }
-
-    fn setup_lua_script(
-        &mut self,
-        sd: &ScriptData,
-        lua: &mut Lua,
-    ) -> mlua::Result<()> {
-        // let world = lua.get_world()?;
-        // let mut world = world.write();
-
-        Ok(())
+        app.register_type::<KeyboardFlightController>().add_systems(
+            FixedUpdate,
+            (flight_controller, keyboard_flight_controller),
+        );
     }
 }
 
