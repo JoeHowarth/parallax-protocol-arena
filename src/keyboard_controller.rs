@@ -19,14 +19,8 @@ impl Plugin for KeyboardControllerPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SelectedCraft>()
             .insert_resource(SelectedCraft(None))
-            .add_systems(Startup, setup)
             .add_systems(Update, update);
     }
-}
-
-fn setup(//
-) {
-    //
 }
 
 #[derive(Default)]
@@ -51,7 +45,6 @@ fn update(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: Local<SelectionState>,
 ) {
-    //
     for click in clicks.read() {
         info!("Click {click}");
         if !matches!(click.button, PointerButton::Primary) {

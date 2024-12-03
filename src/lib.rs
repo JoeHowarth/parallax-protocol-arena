@@ -10,7 +10,6 @@ pub mod utils;
 use std::borrow::Cow;
 
 use bevy::ecs::world::Command;
-use bevy_mod_picking::prelude::*;
 
 use crate::prelude::*;
 

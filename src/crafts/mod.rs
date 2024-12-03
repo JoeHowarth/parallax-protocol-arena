@@ -4,8 +4,6 @@ use crate::prelude::*;
 
 pub mod asteroid;
 pub mod frigate;
-pub mod mining_drone;
-pub mod plasma_drone;
 
 pub struct CraftsPlugin;
 
@@ -43,6 +41,5 @@ impl Faction {
 pub enum CraftKind {
     Asteroid,
     Frigate,
-    PlasmaDrone,
     Missile,
 }

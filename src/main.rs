@@ -6,12 +6,6 @@ use bevy::{
     color::palettes::css,
     utils::{HashMap, HashSet},
 };
-use bevy_mod_picking::{
-    debug::DebugPickingMode,
-    prelude::*,
-    DefaultPickingPlugins,
-    PickableBundle,
-};
 use crafts::Faction;
 use parallax_protocol_arena::{physics::*, prelude::*};
 
@@ -20,17 +14,18 @@ use crate::utils::screen_to_world;
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    resolution: bevy::window::WindowResolution::new(
-                        1700., 1100.,
-                    ),
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        resolution: bevy::window::WindowResolution::new(
+                            1700., 1100.,
+                        ),
+                        ..default()
+                    }),
                     ..default()
-                }),
-                ..default()
-            }),
+                })
+                .set(ImagePlugin::default_nearest()),
             bevy_pancam::PanCamPlugin,
-            DefaultPickingPlugins,
             Shape2dPlugin::default(),
         ))
         .add_plugins(PhysicsSimulationPlugin {
@@ -40,8 +35,7 @@ fn main() {
                 ..default()
             },
         })
-        .insert_resource(DebugPickingMode::Normal)
-        .add_event::<TrajectoryClicked>()
+        // .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, health_despawn)
         .add_systems(
@@ -49,7 +43,7 @@ fn main() {
             (
                 exit_system,
                 (
-                    (handle_trajectory_clicks, handle_engine_input),
+                    (handle_engine_input),
                     update_event_markers,
                     (update_trajectory_segments, update_segment_visuals)
                         .chain(),
@@ -71,7 +65,7 @@ pub fn exit_system(
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
-        Camera2dBundle::default(),
+        Camera2d,
         bevy_pancam::PanCam {
             move_keys: bevy_pancam::DirectionKeys::arrows(),
             grab_buttons: vec![MouseButton::Right],
@@ -107,22 +101,17 @@ pub fn ship_bundle(
 ) -> impl Bundle {
     (
         faction,
-        SpriteBundle {
-            texture: asset_server.load(sprite_name),
-            transform:
                 Transform::from_translation(Vec3::from2(loc)) //
                     .with_scale(Vec3::new(
                         2. * radius / px,
                         2. * radius / px,
                         1.,
                     )),
-            sprite: Sprite {
+            Sprite {
+                image: asset_server.load(sprite_name),
                 color: faction.sprite_color(),
                 ..default()
             },
-            ..default()
-        },
-        PickableBundle::default(),
         PhysicsState {
             position: loc,
             velocity: Vec2::ZERO,
@@ -173,9 +162,10 @@ struct TimelineEventMarker {
 
 #[derive(Bundle)]
 struct TimelineEventMarkerBundle {
-    sprite_bundle: SpriteBundle,
+    sprite_bundle: Sprite,
+    transform: Transform,
     marker: TimelineEventMarker,
-    pickable: Pickable,
+    // pickable: Pickable,
 }
 
 fn update_event_markers(
@@ -268,23 +258,19 @@ fn update_event_markers(
                 // Create new shaft
                 let marker_entity = commands
                     .spawn(TimelineEventMarkerBundle {
-                        sprite_bundle: SpriteBundle {
-                            sprite: Sprite {
-                                color,
-                                custom_size: Some(Vec2::new(
-                                    shaft_length - head_size,
-                                    shaft_width,
-                                )),
-                                ..default()
-                            },
-                            transform: Transform::from_translation(
-                                Vec3::from2(shaft_position),
-                            )
-                            .with_rotation(Quat::from_rotation_z(rotation)),
+                        sprite_bundle: Sprite {
+                            color,
+                            custom_size: Some(Vec2::new(
+                                shaft_length - head_size,
+                                shaft_width,
+                            )),
                             ..default()
                         },
+                        transform: Transform::from_translation(Vec3::from2(
+                            shaft_position,
+                        ))
+                        .with_rotation(Quat::from_rotation_z(rotation)),
                         marker: TimelineEventMarker { tick, input },
-                        pickable: default(),
                     })
                     .id();
 
@@ -320,9 +306,9 @@ struct TrajectorySegment {
 // Bundle to create a trajectory segment entity
 #[derive(Bundle)]
 struct TrajectorySegmentBundle {
-    sprite_bundle: SpriteBundle,
+    sprite_bundle: Sprite,
+    transform: Transform,
     segment: TrajectorySegment,
-    pickable: PickableBundle,
 }
 
 fn update_trajectory_segments(
@@ -417,44 +403,29 @@ fn update_trajectory(
             let Some(seg_ent) = segments_map.get(&(craft_entity, start_tick))
             else {
                 segments_map.insert(
-                        (craft_entity, start_tick),
-                        commands
-                            .spawn((
-                                TrajectorySegmentBundle {
-                                    sprite_bundle: SpriteBundle {
-                                        sprite: Sprite {
-                                            color: Color::srgba(
-                                                1.0, 1.0, 1.0, 0.5,
-                                            ),
-                                            custom_size: Some(Vec2::new(
-                                                length, 2.0,
-                                            )),
-                                            ..default()
-                                        },
-                                        transform: Transform::from_translation(
-                                            Vec3::from2(center_pos),
-                                        )
-                                        .with_rotation(Quat::from_rotation_z(
-                                            angle,
-                                        )),
-                                        ..default()
-                                    },
-                                    segment: TrajectorySegment {
-                                        craft_entity,
-                                        start_tick,
-                                        end_tick,
-                                        start_pos,
-                                        end_pos,
-                                        is_preview: used_keys_or_is_preview.is_none(),
-                                    },
-                                    pickable: default(),
-                                },
-                                On::<Pointer<Click>>::send_event::<
-                                    TrajectoryClicked,
-                                >(),
-                            ))
-                            .id(),
-                    );
+                    (craft_entity, start_tick),
+                    commands
+                        .spawn((TrajectorySegmentBundle {
+                            sprite_bundle: Sprite {
+                                color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+                                custom_size: Some(Vec2::new(length, 2.0)),
+                                ..default()
+                            },
+                            transform: Transform::from_translation(
+                                Vec3::from2(center_pos),
+                            )
+                            .with_rotation(Quat::from_rotation_z(angle)),
+                            segment: TrajectorySegment {
+                                craft_entity,
+                                start_tick,
+                                end_tick,
+                                start_pos,
+                                end_pos,
+                                is_preview: used_keys_or_is_preview.is_none(),
+                            },
+                        },))
+                        .id(),
+                );
                 continue;
             };
 
@@ -475,33 +446,6 @@ fn update_trajectory(
 
             sprite.custom_size.as_mut().unwrap().x = length;
         }
-    }
-}
-
-#[derive(Event)]
-pub struct TrajectoryClicked(pub Entity, pub f32);
-
-impl From<ListenerInput<Pointer<Click>>> for TrajectoryClicked {
-    fn from(event: ListenerInput<Pointer<Click>>) -> Self {
-        TrajectoryClicked(event.target, event.hit.depth)
-    }
-}
-
-fn handle_trajectory_clicks(
-    mut clicks: EventReader<TrajectoryClicked>,
-    query: Query<&TrajectorySegment>,
-) {
-    for click in clicks.read() {
-        let Ok(segment) = query.get(click.0) else {
-            error!("oops");
-            continue;
-        };
-        info!(
-            entity = ?click.0,
-            "Clicked trajectory segment: tick {} to {}",
-            segment.start_tick, segment.end_tick
-        );
-        // Here you can emit an event or trigger your action planning logic
     }
 }
 
