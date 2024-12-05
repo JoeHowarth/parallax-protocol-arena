@@ -17,12 +17,13 @@
 //! 3. Invalidating and recomputing states when new inputs are added
 //! 4. Synchronizing entity transforms with the current simulation tick
 
-use std::collections::BTreeMap;
-
 use crate::prelude::*;
 
+pub mod collisions;
+
 /// Physical properties and control state of a simulated entity
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, Default)]
+#[require(Transform, Timeline)]
 pub struct PhysicsState {
     pub position: Vec2,
     pub velocity: Vec2,
@@ -57,7 +58,7 @@ pub enum ControlInput {
 }
 
 /// Stores scheduled inputs and computed future states for an entity
-#[derive(Component)]
+#[derive(Component, Default)]
 pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
@@ -188,12 +189,17 @@ impl PhysicsState {
 
 fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
-    mut query: Query<&mut Timeline>,
+    mut query: Query<(&PhysicsState, &mut Timeline)>,
 ) {
     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
+    let tick = simulation_config.current_tick;
 
-    for mut timeline in query.iter_mut() {
-        timeline.lookahead(simulation_config.current_tick, seconds_per_tick);
+    for (current_state, mut timeline) in query.iter_mut() {
+        // ensure timline has value for current tick
+        if !timeline.future_states.contains_key(&tick) {
+            timeline.future_states.insert(tick, current_state.clone());
+        }
+        timeline.lookahead(tick, seconds_per_tick);
     }
 }
 
@@ -302,7 +308,11 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(SimulationConfig::default())
-            .add_systems(Update, compute_future_states);
+            .add_event::<TimelineEventRequest>()
+            .add_systems(
+                Update,
+                (process_timeline_events, compute_future_states).chain(),
+            );
         app
     }
 
@@ -462,6 +472,47 @@ mod tests {
         let next_state = state.integrate(1.0 / 60.0);
         assert!(next_state.velocity.x.abs() < f32::EPSILON);
         assert!(next_state.velocity.y > 0.0);
+    }
+
+    #[test]
+    fn test_timeline_event_processing_required_components() {
+        let mut app = create_test_app();
+        bevy::log::tracing_subscriber::fmt::init();
+
+        // Set up entity with multiple control inputs
+        let entity = app.world_mut().spawn(create_test_physics_state()).id();
+        app.world_mut().send_event(TimelineEventRequest {
+            entity,
+            tick: 10,
+            input: ControlInput::SetThrust(1.0),
+        });
+        app.world_mut().send_event(TimelineEventRequest {
+            entity,
+            tick: 20,
+            input: ControlInput::SetRotation(std::f32::consts::FRAC_PI_2),
+        });
+
+        app.update();
+
+        let timeline = app
+            .world()
+            .entity(entity)
+            .get::<Timeline>()
+            .expect("Timeline component should exist");
+
+        // Check state at tick 15 (after thrust, before rotation)
+        let mid_state = timeline
+            .future_states
+            .get(&15)
+            .expect("Should have state after thrust application");
+        assert!(mid_state.velocity.x > 0.0);
+
+        // Check state at tick 25 (after both events)
+        let final_state = timeline
+            .future_states
+            .get(&25)
+            .expect("Should have state after rotation");
+        assert_eq!(final_state.rotation, std::f32::consts::FRAC_PI_2);
     }
 
     #[test]

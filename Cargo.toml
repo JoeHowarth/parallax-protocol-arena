@@ -17,6 +17,10 @@ ustr = "1.1.0"
 assert_approx_eq = "1.1.0"
 bevy_vector_shapes = "0.9.2"
 bevy_pancam = "0.16.0"
+serde = "1.0.215"
+serde_json = "1.0.133"
+rand = { version = "0.8.5", features = ["small_rng"] }
+rtree_rs = "0.1.4"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

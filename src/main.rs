@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use asteroid::{AsteroidPlugin, SmallAsteroid};
 use bevy::{
     color::palettes::css,
     utils::{HashMap, HashSet},
@@ -28,13 +29,16 @@ fn main() {
             bevy_pancam::PanCamPlugin,
             Shape2dPlugin::default(),
         ))
-        .add_plugins(PhysicsSimulationPlugin {
-            config: SimulationConfig {
-                ticks_per_second: 10,
-                time_dilation: 0.25,
-                ..default()
+        .add_plugins((
+            PhysicsSimulationPlugin {
+                config: SimulationConfig {
+                    ticks_per_second: 10,
+                    time_dilation: 0.25,
+                    ..default()
+                },
             },
-        })
+            AsteroidPlugin,
+        ))
         // .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, health_despawn)
@@ -88,6 +92,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         Faction::Red,
         Vec2::new(-10., -10.),
         &asset_server,
+    ));
+
+    commands.queue(SmallAsteroid::spawn(
+        Vec2::new(40., 20.),
+        Vec2::new(1., -2.),
     ));
 }
 

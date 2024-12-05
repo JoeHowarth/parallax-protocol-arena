@@ -1,4 +1,59 @@
-use bevy::prelude::Vec2;
+use bevy::{
+    math::Rect as BRect,
+    prelude::{Vec2, Vec3},
+};
+
+pub type RRect = rtree_rs::Rect<2, f32>;
+
+pub trait RectExt {
+    fn to_bevy(&self) -> BRect;
+    fn to_rtree(&self) -> RRect;
+}
+
+impl RectExt for RRect {
+    fn to_bevy(&self) -> BRect {
+        BRect::new(self.min[0], self.min[1], self.max[0], self.max[1])
+    }
+
+    fn to_rtree(&self) -> RRect {
+        *self
+    }
+}
+
+impl RectExt for BRect {
+    fn to_bevy(&self) -> BRect {
+        *self
+    }
+
+    fn to_rtree(&self) -> RRect {
+        RRect::new(self.min.to_array(), self.max.to_array())
+    }
+}
+
+pub trait Vec2Ext {
+    fn to3(&self) -> Vec3;
+}
+
+impl Vec2Ext for Vec2 {
+    fn to3(&self) -> Vec3 {
+        Vec3::from2(*self)
+    }
+}
+
+pub trait Vec3Ext {
+    fn new2(x: impl Into<f32>, y: impl Into<f32>) -> Vec3;
+    fn from2(vec2: impl Into<Vec2>) -> Vec3;
+}
+
+impl Vec3Ext for Vec3 {
+    fn new2(x: impl Into<f32>, y: impl Into<f32>) -> Vec3 {
+        Vec3::new(x.into(), y.into(), 0.)
+    }
+
+    fn from2(vec2: impl Into<Vec2>) -> Vec3 {
+        Vec3::from((vec2.into(), 0.))
+    }
+}
 
 /// Convert screen coordinates to world coordinates
 /// Screen: (0,0) at top-left, +y down
@@ -46,7 +101,6 @@ pub fn intersect_ray_aabb(
         return Err(IntersectError::ZeroDirection);
     }
 
-    // Initialize t to infinity
     let mut t = f32::INFINITY;
 
     // Check X axis if moving in X
