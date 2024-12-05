@@ -3,58 +3,48 @@ use utils::intersect_ray_aabb;
 
 use crate::prelude::*;
 
-#[derive(Resource, Reflect, Debug)]
-pub struct BoundingBox {
-    entity: Entity,
-    aabb: Rect,
-    pos: Vec2,
-    dim: Vec2,
+#[derive(Component, Debug, Clone, Deref, Copy)]
+pub struct Collider(pub BRect);
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Collision {
+    pub tick: u64,
+    pub this: Entity,
+    pub this_result: EntityCollisionResult,
+    pub other: Entity,
+    pub other_result: EntityCollisionResult,
 }
 
-// impl BoundingBox {
-//     pub fn from(entity: Entity, pos: Vec2, dim: Vec2) -> Self {
-//         Self {
-//             entity,
-//             pos,
-//             dim,
-//             aabb: Rect::from_corners(pos - dim * 0.5, pos + dim * 0.5),
-//         }
-//     }
-//
-//     pub fn collides(&self, other: &Self) -> bool {
-//         let m = self.aabb;
-//         let n = other.aabb;
-//         dbg!(&n, &m);
-//         dbg!(m.min.x <= n.max.x)
-//             && dbg!(m.max.x >= n.min.x)
-//             && dbg!(m.min.y <= n.max.y)
-//             && dbg!(m.max.y >= n.min.y)
-//     }
-//
-//     pub fn min_ints(&self) -> (i32, i32) {
-//         let aabb = self.aabb;
-//         (aabb.min.x as i32, aabb.min.y as i32)
-//     }
-// }
+#[derive(Clone, PartialEq, Debug)]
+pub enum EntityCollisionResult {
+    Destroyed,
+    Survives { post_pos: Vec2, post_vel: Vec2 },
+}
 
-#[derive(Clone, PartialEq)]
-pub struct Collision {
-    pub this: Entity,
-    pub other: Entity,
-    pub other_bbox: RRect,
+#[derive(Clone, PartialEq, Debug)]
+pub struct SpatialItem {
+    pub entity: Entity,
+    pub pos: Vec2,
+    pub vel: Vec2,
+    pub mass: f32,
 }
 
 #[derive(Resource, Default)]
 // pub struct SpatialIndex(pub EntityHashMap<BTreeMap<u64, BoundingBox>>);
-pub struct SpatialIndex(pub BTreeMap<u64, RTree<2, f32, Entity>>);
+pub struct SpatialIndex(pub BTreeMap<u64, RTree<2, f32, SpatialItem>>);
 
 impl SpatialIndex {
-    pub fn collides(&self, tick: u64, rect: Rect) -> Option<(RRect, Entity)> {
+    pub fn collides(
+        &self,
+        tick: u64,
+        pos: Vec2,
+        rect: &Collider,
+    ) -> Option<(RRect, SpatialItem)> {
         self.0.get(&tick).and_then(|index| {
             index
-                .search(rect.to_rtree())
+                .search(rect.to_rtree().transalate(pos))
                 .next()
-                .map(|item| (item.rect, *item.data))
+                .map(|item| (item.rect, item.data.clone()))
         })
     }
 
@@ -63,12 +53,91 @@ impl SpatialIndex {
     }
 }
 
+/// Calculate specific impact energy Q (J/kg) for a collision between two masses
+/// given velocity in m/s
+///
+/// # Returns
+/// * Tuple of specific impact energies (J/kg)
+pub fn calculate_impact_energy(
+    m1: f32,
+    m2: f32,
+    rel_velocity: Vec2,
+) -> (f32, f32) {
+    // Calculate v² in (m/s)²
+    let v_squared = rel_velocity.length_squared();
+
+    // Calculate mass ratio μ = m2/m1
+    let mu = m2 / m1;
+
+    // Q = ½μv²
+    let q1 = 0.5 * mu * v_squared;
+    let q2 = 0.5 * (1.0 / mu) * v_squared;
+    (q1, q2)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CollisionOutcome {
+    SurfaceEffects,
+    Cratering,
+    Fracturing,
+    MajorRestructuring,
+    Disruption,
+}
+
+impl CollisionOutcome {
+    pub fn is_destoyed(q: f32) -> bool {
+        if q < 100. {
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn from_q(q: f32) -> Self {
+        match q {
+            q if q < 10.0 => CollisionOutcome::SurfaceEffects,
+            q if q < 100.0 => CollisionOutcome::Cratering,
+            q if q < 1000.0 => CollisionOutcome::Fracturing,
+            q if q < 10000.0 => CollisionOutcome::MajorRestructuring,
+            _ => CollisionOutcome::Disruption,
+        }
+    }
+}
+
+pub fn calculate_inelastic_collision(
+    mass_a: f32,
+    vel_a: Vec2,
+    mass_b: f32,
+    vel_b: Vec2,
+) -> Vec2 {
+    // Calculate momentum conservation: p1 + p2 = (m1 + m2)v_final
+    let total_momentum = (vel_a * mass_a) + (vel_b * mass_b);
+
+    // Final velocity = total momentum / total mass
+    total_momentum / (mass_a + mass_b)
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::prelude::*;
 
     use super::*;
 
+    #[test]
+    fn test_slow_equal_mass() {
+        let v = Vec2::new(50.0, 0.0); // 50 m/s
+        let (q1, q2) = calculate_impact_energy(1000.0, 1000.0, v);
+        assert!((q1 - 1250.0).abs() < 0.1);
+        assert!((q2 - 1250.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_diagonal_velocity() {
+        let v = Vec2::new(30.0, 40.0); // 50 m/s magnitude
+        let (q1, q2) = calculate_impact_energy(1000.0, 100.0, v);
+        assert!((q1 - 125.0).abs() < 0.1);
+        assert!((q2 - 1250.0).abs() < 0.1);
+    }
     // fn create_box(
     //     entity: u32,
     //     pos: (f32, f32),

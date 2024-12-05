@@ -17,6 +17,17 @@
 //! 3. Invalidating and recomputing states when new inputs are added
 //! 4. Synchronizing entity transforms with the current simulation tick
 
+use bevy::utils::warn;
+use collisions::{
+    calculate_impact_energy,
+    calculate_inelastic_collision,
+    Collider,
+    Collision,
+    EntityCollisionResult,
+    SpatialIndex,
+    SpatialItem,
+};
+
 use crate::prelude::*;
 
 pub mod collisions;
@@ -33,6 +44,8 @@ pub struct PhysicsState {
     // start with this for basic thrust, but can move them out later
     pub current_thrust: f32, // -1.0 to 1.0
     pub max_thrust: f32,     // newtons
+    // TODO: come up with a better way to model destruction
+    pub alive: bool,
 }
 
 #[derive(Event, Debug)]
@@ -57,13 +70,24 @@ pub enum ControlInput {
     SetThrustAndRotation(f32, f32),
 }
 
+#[derive(Clone, Debug)]
+pub enum PhysicsEvent {
+    Collision(Collision),
+}
+
+#[derive(Clone, Debug)]
+pub enum TimelineEvent {
+    Control(ControlInput),
+    Physics(PhysicsEvent),
+}
+
 /// Stores scheduled inputs and computed future states for an entity
 #[derive(Component, Default)]
 pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
     /// Ordered list of future control inputs
-    pub events: BTreeMap<u64, ControlInput>,
+    pub events: BTreeMap<u64, TimelineEvent>,
     /// Last tick that has valid computed states
     pub last_computed_tick: u64,
 }
@@ -156,7 +180,9 @@ fn process_timeline_events(
         // just insert with binary search in the future
         let prev_last_computed_tick = timeline.last_computed_tick;
         timeline.last_computed_tick = timeline.last_computed_tick.min(*tick);
-        timeline.events.insert(*tick, *input);
+        timeline
+            .events
+            .insert(*tick, TimelineEvent::Control(*input));
 
         info!(
             prev_last_computed_tick,
@@ -183,67 +209,270 @@ impl PhysicsState {
             mass: self.mass,
             current_thrust: self.current_thrust,
             max_thrust: self.max_thrust,
+            alive: self.alive,
+        }
+    }
+
+    fn apply_collision(&mut self, this: Entity, collision: &Collision) {
+        let result = if this == collision.this {
+            &collision.this_result
+        } else {
+            &collision.other_result
+        };
+        match result {
+            collisions::EntityCollisionResult::Destroyed => {
+                // TODO: clean this up
+                self.alive = false;
+            }
+            collisions::EntityCollisionResult::Survives {
+                post_pos,
+                post_vel,
+            } => {
+                self.position = *post_pos;
+                self.velocity = *post_vel;
+            }
+        }
+    }
+
+    fn collision_result(
+        &self,
+        other_aabb: RRect,
+        other: &SpatialItem,
+    ) -> (EntityCollisionResult, EntityCollisionResult) {
+        let (q, q_other) = calculate_impact_energy(
+            self.mass,
+            other.mass,
+            other.vel - self.velocity,
+        );
+        let post_vel = calculate_inelastic_collision(
+            self.mass,
+            self.velocity,
+            other.mass,
+            other.vel,
+        );
+        if q > q_other {
+            (
+                EntityCollisionResult::Destroyed,
+                EntityCollisionResult::Survives {
+                    post_pos: other.pos,
+                    post_vel,
+                },
+            )
+        } else {
+            (
+                EntityCollisionResult::Survives {
+                    post_pos: self.position,
+                    post_vel,
+                },
+                EntityCollisionResult::Destroyed,
+            )
         }
     }
 }
 
 fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
-    mut query: Query<(&PhysicsState, &mut Timeline)>,
+    mut spatial_index: ResMut<SpatialIndex>,
+    mut query: Query<(Entity, &Collider, &PhysicsState, &mut Timeline)>,
+    mut invalidations: Local<EntityHashMap<Collision>>,
 ) {
     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
     let tick = simulation_config.current_tick;
+    invalidations.clear();
 
-    for (current_state, mut timeline) in query.iter_mut() {
-        // ensure timline has value for current tick
-        if !timeline.future_states.contains_key(&tick) {
-            timeline.future_states.insert(tick, current_state.clone());
+    loop {
+        for (e, collider, current_state, mut timeline) in query.iter_mut() {
+            // ensure timline has value for current tick
+            if !timeline.future_states.contains_key(&tick) {
+                timeline.future_states.insert(tick, current_state.clone());
+            }
+
+            if let Some(collision) = invalidations.remove(&e) {
+                // TODO: should this be tick - 1?
+                timeline.last_computed_tick =
+                    dbg!(dbg!(timeline.last_computed_tick).min(collision.tick));
+
+                let ejected = timeline.events.insert(
+                    collision.tick,
+                    TimelineEvent::Physics(PhysicsEvent::Collision(collision)),
+                );
+                if let Some(ejected) = ejected {
+                    warn!(
+                        ?ejected,
+                        ?e,
+                        "we ejected a valid event when handling collision!"
+                    );
+                }
+            }
+
+            timeline.lookahead(
+                e,
+                tick,
+                seconds_per_tick,
+                &collider,
+                &mut spatial_index,
+                &mut invalidations,
+            );
         }
-        timeline.lookahead(tick, seconds_per_tick);
+
+        if invalidations.is_empty() {
+            info!("No more invalidations, breaking...");
+            break;
+        }
     }
 }
 
+// fn compute_future_states(
+//     simulation_config: Res<SimulationConfig>,
+//     mut query: Query<(&PhysicsState, &mut Timeline)>,
+// ) {
+//     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
+//     let tick = simulation_config.current_tick;
+//
+//     for (current_state, mut timeline) in query.iter_mut() {
+//         // ensure timline has value for current tick
+//         if !timeline.future_states.contains_key(&tick) {
+//             timeline.future_states.insert(tick, current_state.clone());
+//         }
+//         timeline.lookahead(tick, seconds_per_tick);
+//     }
+// }
+
 impl Timeline {
-    pub fn lookahead(&mut self, current_tick: u64, seconds_per_tick: f32) {
+    pub fn lookahead(
+        &mut self,
+        e: Entity,
+        current_tick: u64,
+        seconds_per_tick: f32,
+        collider: &Collider,
+        spatial_index: &SpatialIndex,
+        invalidations: &mut EntityHashMap<Collision>,
+    ) {
         // Start computation from the earliest invalid state
         let start_tick = self.last_computed_tick.max(current_tick + 1);
-        let end_tick = current_tick + PREDICTION_TICKS;
+        let mut end_tick = current_tick + PREDICTION_TICKS;
 
         let mut state =
             self.future_states.get(&(start_tick - 1)).unwrap().clone();
 
         for tick in start_tick..=end_tick {
             // Apply any control inputs that occur at this tick
-            if let Some(input) = self.events.get(&tick) {
-                info!(?input, tick, ?state, "Found input");
-                match input {
-                    ControlInput::SetThrust(thrust) => {
-                        state.current_thrust = *thrust;
+            if let Some(event) = self.events.get(&tick) {
+                info!(?event, tick, ?state, "Found input");
+
+                use TimelineEvent::{Control, Physics};
+
+                match event {
+                    Control(control_event) => {
+                        match control_event {
+                            ControlInput::SetThrust(thrust) => {
+                                state.current_thrust = *thrust;
+                            }
+                            ControlInput::SetRotation(rotation) => {
+                                state.rotation = *rotation;
+                                state.angular_velocity = 0.;
+                            }
+                            ControlInput::SetThrustAndRotation(
+                                thrust,
+                                rotation,
+                            ) => {
+                                state.current_thrust = *thrust;
+                                state.rotation = *rotation;
+                                state.angular_velocity = 0.;
+                            }
+                            ControlInput::SetAngVel(ang_vel) => {
+                                state.angular_velocity = *ang_vel;
+                            }
+                        }
+
+                        // Integrate physics with time scale
+                        state = state.integrate(seconds_per_tick);
                     }
-                    ControlInput::SetRotation(rotation) => {
-                        state.rotation = *rotation;
-                        state.angular_velocity = 0.;
-                    }
-                    ControlInput::SetThrustAndRotation(thrust, rotation) => {
-                        state.current_thrust = *thrust;
-                        state.rotation = *rotation;
-                        state.angular_velocity = 0.;
-                    }
-                    ControlInput::SetAngVel(ang_vel) => {
-                        state.angular_velocity = *ang_vel;
+                    Physics(physics_event) => {
+                        // Integrate state before applying physics event
+                        // TODO: is this for all physics events or just
+                        // collisions?
+                        state = state.integrate(seconds_per_tick);
+
+                        match physics_event {
+                            PhysicsEvent::Collision(collision) => {
+                                state.apply_collision(e, collision);
+                            }
+                        }
                     }
                 }
+            } else {
+                // Integrate physics with time scale
+                state = state.integrate(seconds_per_tick);
             }
 
-            // Integrate physics with time scale
-            state = state.integrate(seconds_per_tick);
+            if let Some((other_aabb, other)) =
+                spatial_index.collides(tick, state.position, collider)
+            {
+                let (this_result, other_result) =
+                    state.collision_result(other_aabb, &other);
+                let collision = Collision {
+                    tick,
+                    this: e,
+                    this_result,
+                    other: other.entity,
+                    other_result,
+                };
+                state.apply_collision(e, &collision);
+                invalidations.insert(other.entity, collision);
+            }
 
             // Store the new state
             self.future_states.insert(tick, state.clone());
+            if !state.alive {
+                end_tick = tick;
+                break;
+            }
         }
 
         self.last_computed_tick = end_tick;
     }
+
+    // pub fn lookahead(&mut self, current_tick: u64, seconds_per_tick: f32) {
+    //     // Start computation from the earliest invalid state
+    //     let start_tick = self.last_computed_tick.max(current_tick + 1);
+    //     let end_tick = current_tick + PREDICTION_TICKS;
+    //
+    //     let mut state =
+    //         self.future_states.get(&(start_tick - 1)).unwrap().clone();
+    //
+    //     for tick in start_tick..=end_tick {
+    //         // Apply any control inputs that occur at this tick
+    //         if let Some(input) = self.events.get(&tick) {
+    //             info!(?input, tick, ?state, "Found input");
+    //             match input {
+    //                 ControlInput::SetThrust(thrust) => {
+    //                     state.current_thrust = *thrust;
+    //                 }
+    //                 ControlInput::SetRotation(rotation) => {
+    //                     state.rotation = *rotation;
+    //                     state.angular_velocity = 0.;
+    //                 }
+    //                 ControlInput::SetThrustAndRotation(thrust, rotation) => {
+    //                     state.current_thrust = *thrust;
+    //                     state.rotation = *rotation;
+    //                     state.angular_velocity = 0.;
+    //                 }
+    //                 ControlInput::SetAngVel(ang_vel) => {
+    //                     state.angular_velocity = *ang_vel;
+    //                 }
+    //             }
+    //         }
+    //
+    //         // Integrate physics with time scale
+    //         state = state.integrate(seconds_per_tick);
+    //
+    //         // Store the new state
+    //         self.future_states.insert(tick, state.clone());
+    //     }
+    //
+    //     self.last_computed_tick = end_tick;
+    // }
 }
 
 /// Update tranform and physics state from timeline
@@ -325,6 +554,7 @@ mod tests {
             mass: 1.0,
             current_thrust: 0.0,
             max_thrust: 100.0,
+            alive: true,
         }
     }
 
@@ -341,6 +571,7 @@ mod tests {
             mass: 1.0,
             current_thrust: 0.0,
             max_thrust: 100.0,
+            alive: true,
         };
 
         let next_state = state.integrate(delta);
@@ -363,6 +594,7 @@ mod tests {
             mass: 2.0,           // 2kg mass
             current_thrust: 1.0, // Full thrust
             max_thrust: 100.0,   // 100N max thrust
+            alive: true,
         };
 
         let next_state = state.integrate(delta);
@@ -386,6 +618,7 @@ mod tests {
             mass: 2.0,
             current_thrust: 1.0,
             max_thrust: 100.0,
+            alive: true,
         };
 
         let next_state = state.integrate(delta);
@@ -429,7 +662,13 @@ mod tests {
                 state,
                 Timeline {
                     events: BTreeMap::from_iter(
-                        [(30, ControlInput::SetThrust(1.0))].into_iter(),
+                        [(
+                            30,
+                            TimelineEvent::Control(ControlInput::SetThrust(
+                                1.0,
+                            )),
+                        )]
+                        .into_iter(),
                     ),
                     future_states,
                     last_computed_tick: 1,
@@ -530,11 +769,18 @@ mod tests {
                 Timeline {
                     events: BTreeMap::from_iter(
                         [
-                            (10, ControlInput::SetThrust(1.0)),
+                            (
+                                10,
+                                TimelineEvent::Control(
+                                    ControlInput::SetThrust(1.0),
+                                ),
+                            ),
                             (
                                 20,
-                                ControlInput::SetRotation(
-                                    std::f32::consts::FRAC_PI_2,
+                                TimelineEvent::Control(
+                                    ControlInput::SetRotation(
+                                        std::f32::consts::FRAC_PI_2,
+                                    ),
                                 ),
                             ),
                         ]

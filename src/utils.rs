@@ -1,13 +1,12 @@
-use bevy::{
-    math::Rect as BRect,
-    prelude::{Vec2, Vec3},
-};
+pub use bevy::math::Rect as BRect;
+use bevy::prelude::{Vec2, Vec3};
 
 pub type RRect = rtree_rs::Rect<2, f32>;
 
 pub trait RectExt {
     fn to_bevy(&self) -> BRect;
     fn to_rtree(&self) -> RRect;
+    fn transalate(&self, by: Vec2) -> Self;
 }
 
 impl RectExt for RRect {
@@ -18,6 +17,15 @@ impl RectExt for RRect {
     fn to_rtree(&self) -> RRect {
         *self
     }
+
+    fn transalate(&self, by: Vec2) -> Self {
+        let mut new = *self;
+        new.min[0] += by.x;
+        new.max[0] += by.x;
+        new.min[1] += by.y;
+        new.max[1] += by.y;
+        new
+    }
 }
 
 impl RectExt for BRect {
@@ -27,6 +35,13 @@ impl RectExt for BRect {
 
     fn to_rtree(&self) -> RRect {
         RRect::new(self.min.to_array(), self.max.to_array())
+    }
+
+    fn transalate(&self, by: Vec2) -> Self {
+        let mut new = *self;
+        new.min += by;
+        new.max += by;
+        new
     }
 }
 

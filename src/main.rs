@@ -7,6 +7,7 @@ use bevy::{
     color::palettes::css,
     utils::{HashMap, HashSet},
 };
+use collisions::{Collider, SpatialIndex};
 use crafts::Faction;
 use parallax_protocol_arena::{physics::*, prelude::*};
 
@@ -129,16 +130,17 @@ pub fn ship_bundle(
             mass: 1.,
             current_thrust: 0.,
             max_thrust: 100.,
+            alive: true
         },
         Timeline {
             events: BTreeMap::from_iter(
                 [
-                    (5, ControlInput::SetThrust(1.)),
-                    (20, ControlInput::SetThrust(0.)),
-                    (60, ControlInput::SetRotation(PI)),
-                    (61, ControlInput::SetAngVel(0.1)),
-                    (65, ControlInput::SetThrust(1.)),
-                    (80, ControlInput::SetThrust(0.1)),
+                    (5, TimelineEvent::Control(ControlInput::SetThrust(1.))),
+                    (20, TimelineEvent::Control(ControlInput::SetThrust(0.))),
+                    (60, TimelineEvent::Control(ControlInput::SetRotation(PI))),
+                    (61, TimelineEvent::Control(ControlInput::SetAngVel(0.1))),
+                    (65, TimelineEvent::Control(ControlInput::SetThrust(1.))),
+                    (80, TimelineEvent::Control(ControlInput::SetThrust(0.1))),
                 ]
                 .into_iter(),
             ),
@@ -154,6 +156,7 @@ pub fn ship_bundle(
                         mass: 1.,
                         current_thrust: 0.,
                         max_thrust: 100.,
+                        alive: true
                     },
                 )]
                 .into_iter(),
@@ -166,7 +169,7 @@ pub fn ship_bundle(
 #[derive(Component)]
 struct TimelineEventMarker {
     tick: u64,
-    input: ControlInput,
+    input: TimelineEvent,
 }
 
 #[derive(Bundle)]
@@ -194,7 +197,7 @@ fn update_event_markers(
     for (timeline_entity, timeline) in query.iter() {
         for (tick, input) in timeline.events.iter() {
             let tick = *tick;
-            let input = *input;
+            let input = input.clone();
 
             let Some(state) = timeline.future_states.get(&tick) else {
                 continue;
@@ -204,28 +207,37 @@ fn update_event_markers(
             used_keys.insert((timeline_entity, tick));
 
             let (color, shaft_length, rotation) = match input {
-                ControlInput::SetThrust(thrust) => {
-                    let magnitude = (thrust.abs() * 50.0).min(50.0);
-                    (
-                        Color::srgba(1.0, 0.0, 0.0, 0.8),
-                        magnitude,
-                        state.rotation,
-                    )
-                }
-                ControlInput::SetThrustAndRotation(thrust, rotation) => {
-                    let magnitude = (thrust.abs() * 50.0).min(50.0);
-                    (Color::srgba(1.0, 0.0, 0.0, 0.8), magnitude, rotation)
-                }
-                ControlInput::SetRotation(rotation) => {
-                    (Color::srgba(0.0, 1.0, 0.0, 0.8), 20.0, rotation)
-                }
-                ControlInput::SetAngVel(ang_vel) => {
-                    let magnitude = (ang_vel.abs() * 8.0).min(20.0);
-                    (
-                        Color::srgba(0.0, 0.0, 1.0, 0.8),
-                        magnitude,
-                        state.rotation,
-                    )
+                TimelineEvent::Control(control_input) => match control_input {
+                    ControlInput::SetThrust(thrust) => {
+                        let magnitude = (thrust.abs() * 50.0).min(50.0);
+                        (
+                            Color::srgba(1.0, 0.0, 0.0, 0.8),
+                            magnitude,
+                            state.rotation,
+                        )
+                    }
+                    ControlInput::SetThrustAndRotation(thrust, rotation) => {
+                        let magnitude = (thrust.abs() * 50.0).min(50.0);
+                        (Color::srgba(1.0, 0.0, 0.0, 0.8), magnitude, rotation)
+                    }
+                    ControlInput::SetRotation(rotation) => {
+                        (Color::srgba(0.0, 1.0, 0.0, 0.8), 20.0, rotation)
+                    }
+                    ControlInput::SetAngVel(ang_vel) => {
+                        let magnitude = (ang_vel.abs() * 8.0).min(20.0);
+                        (
+                            Color::srgba(0.0, 0.0, 1.0, 0.8),
+                            magnitude,
+                            state.rotation,
+                        )
+                    }
+                },
+                TimelineEvent::Physics(ref physics_event) => {
+                    match physics_event {
+                        PhysicsEvent::Collision(_collision) => {
+                            (css::DARK_SALMON.into(), 20_f32, state.rotation)
+                        }
+                    }
                 }
             };
 
@@ -463,15 +475,16 @@ fn handle_engine_input(
     mut drag_end_r: EventReader<Pointer<DragEnd>>,
     mut drag_r: EventReader<Pointer<Drag>>,
     segments: Query<&TrajectorySegment>,
-    timelines: Query<&Timeline>,
+    timelines: Query<(&Collider, &Timeline)>,
     mut preview: Option<ResMut<TrajectoryPreview>>,
     mut timeline_event_writer: EventWriter<TimelineEventRequest>,
     mut commands: Commands,
     simulation_config: Res<SimulationConfig>,
+    spatial_index: Res<SpatialIndex>,
 ) {
     for drag_start in drag_start_r.read() {
         let seg = segments.get(drag_start.target).unwrap();
-        let timeline = timelines.get(seg.craft_entity).unwrap();
+        let (_, timeline) = timelines.get(seg.craft_entity).unwrap();
 
         // Create preview timeline starting from segment's end tick
         commands.insert_resource(TrajectoryPreview {
@@ -502,21 +515,31 @@ fn handle_engine_input(
         };
 
         let world_drag = screen_to_world(drag.distance);
+        let (collider, _) = timelines.get(seg.craft_entity).unwrap();
 
         // Patch preview timeline
         preview.timeline.events.insert(
             seg.end_tick,
-            ControlInput::SetThrustAndRotation(
+            TimelineEvent::Control(ControlInput::SetThrustAndRotation(
                 (world_drag.length() / 50.).min(1.),
                 world_drag.to_angle(),
-            ),
+            )),
         );
         preview.timeline.last_computed_tick = preview.start_tick;
 
+        let mut invalidations = EntityHashMap::default();
         let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
-        preview
-            .timeline
-            .lookahead(simulation_config.current_tick, seconds_per_tick);
+        preview.timeline.lookahead(
+            drag.target,
+            simulation_config.current_tick,
+            seconds_per_tick,
+            &collider,
+            &spatial_index,
+            &mut invalidations,
+        );
+        if invalidations.len() > 0 {
+            info!("Collision invalidations non-zero during preview");
+        }
     }
 
     for drag_end in drag_end_r.read() {
