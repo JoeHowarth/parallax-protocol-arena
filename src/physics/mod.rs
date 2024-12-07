@@ -398,15 +398,13 @@ fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, Option<&Collider>, &PhysicsState, &mut Timeline)>,
-    mut new_collisions: Local<EntityHashMap<Collision>>,
-    mut invalid_collisions: Local<EntityHashMap<Collision>>,
 ) {
     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
-    let tick = simulation_config.current_tick;
-    new_collisions.clear();
-    invalid_collisions.clear();
+
+    let mut interaction = None;
 
     for i in 0..5 {
+        let tick = simulation_config.current_tick;
         eprintln!("{i}th iter");
         for (e, collider, current_state, mut timeline) in query.iter_mut() {
             // ensure timline has value for current tick
@@ -417,61 +415,112 @@ fn compute_future_states(
                     .insert(tick - 1, current_state.clone());
             }
 
-            if let Some(collision) = new_collisions.remove(&e) {
-                // TODO: should this be tick - 1?
-                timeline.last_computed_tick =
-                    dbg!(dbg!(timeline.last_computed_tick).min(collision.tick));
-
-                let ejected = timeline.events.insert(
-                    collision.tick,
-                    TimelineEvent::Collision(collision),
-                );
-                if let Some(ejected) = ejected {
-                    warn!(
-                        ?ejected,
-                        ?e,
-                        "we ejected a valid event when handling collision!"
-                    );
-                }
-            }
-
-            let updated_range = timeline.lookahead(
+            let ret = timeline.lookahead(
                 e,
                 tick,
                 seconds_per_tick,
                 simulation_config.prediction_ticks,
                 collider,
                 &spatial_index,
-                &mut new_collisions,
-                &mut invalid_collisions,
             );
 
-            // patch spatial index
+            // Patch spatial index
             if let Some(collider) = collider {
-                for tick in updated_range {
-                    // eprintln!("Inserting into spatial index {tick}");
-                    let state = timeline.future_states.get(&tick).unwrap();
-                    spatial_index.insert(
-                        tick,
-                        collider,
-                        SpatialItem {
-                            entity: e,
-                            pos: state.pos,
-                            vel: state.vel,
-                            mass: state.mass,
-                        },
-                    );
-                }
+                spatial_index.patch(
+                    e,
+                    &timeline,
+                    collider,
+                    ret.updated,
+                    ret.removed,
+                );
+            }
+
+            if ret.interaction.is_some() {
+                // Eject and resolve interaction
+                interaction = ret.interaction;
+                break;
             }
         }
 
-        if new_collisions.is_empty() {
-            info!("No more invalidations, breaking...");
-            dbg!("No more invalidations, breaking...");
-            break;
-        }
+        let Some(interaction) = interaction else {
+            info!("Loop finished with no interaction to resolve. Done");
+            return;
+        };
+
+        let [ (a_e, a_col, _, mut a_tl), // fmt
+          (b_e, b_col, _, mut b_tl) // fmt
+        ] = query.get_many_mut(interaction.0.0).unwrap();
+        resolve_collisions(
+            interaction.0 .1,
+            (a_e, a_col, &mut a_tl),
+            (b_e, b_col, &mut b_tl),
+            seconds_per_tick,
+            &mut spatial_index,
+        );
+    }
+    panic!(
+        "Exited loop without resolving all interactions. Suggests infinite \
+         loop bug"
+    );
+}
+
+fn resolve_collisions(
+    tick: u64,
+    (a_e, a_col, a_tl): (Entity, Option<&Collider>, &mut Timeline),
+    (b_e, b_col, b_tl): (Entity, Option<&Collider>, &mut Timeline),
+    seconds_per_tick: f32,
+    spatial_index: &mut SpatialIndex,
+) {
+    // STEP 1: Remove B's state and replay tick t
+
+    // FIXME: check this is an interaction event
+    b_tl.events.remove(&tick);
+    b_tl.last_computed_tick = tick - 1;
+
+    let b_ret =
+        b_tl.lookahead(b_e, tick, seconds_per_tick, 2, b_col, &spatial_index);
+    // TODO: Make collider non-optional
+    let a_col = a_col.expect("Must have colider to be part of interaction");
+    let b_col = b_col.expect("Must have colider to be part of interaction");
+
+    assert_eq!(*b_ret.updated.end(), tick);
+
+    // patch b's spatial index
+    spatial_index.patch(b_e, &b_tl, b_col, b_ret.updated, b_ret.removed);
+
+    // NOTE:both must have computed state at tick, but not applied any
+    // interaction events
+    let a_st = a_tl.future_states.get_mut(&tick).unwrap();
+    let b_st = b_tl.future_states.get_mut(&tick).unwrap();
+
+    // STEP 2: check for interaction
+    if let Some(collision) =
+        check_for_collision(a_e, tick, a_st, Some(a_col), &spatial_index)
+    {
+        // STEP 3: resolve interaction
+        a_st.apply_collision(a_e, &collision);
+        b_st.apply_collision(b_e, &collision);
+        a_tl.events
+            .insert(tick, TimelineEvent::Collision(collision.clone()));
+        b_tl.events
+            .insert(tick, TimelineEvent::Collision(collision));
+        a_tl.last_computed_tick = tick;
+        b_tl.last_computed_tick = tick;
     }
 }
+
+#[derive(Debug)]
+pub struct LookaheadRet {
+    /// States that changed
+    pub updated: RangeInclusive<u64>,
+    /// States that were removed
+    pub removed: Option<RangeInclusive<u64>>,
+    /// Entities that interact and at what tick
+    pub interaction: Option<InteractionLocator>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct InteractionLocator(([Entity; 2], u64));
 
 impl Timeline {
     pub fn lookahead(
@@ -482,107 +531,77 @@ impl Timeline {
         prediction_ticks: u64,
         collider: Option<&Collider>,
         spatial_index: &SpatialIndex,
-        // new collision events generated by this timeline that need to be
-        // applied to other entity
-        new_collisions: &mut EntityHashMap<Collision>,
-        // other entities that we shared a collision event with, but that now
-        // doesn't happen
-        invalid_collisions: &mut EntityHashMap<Collision>,
-    ) -> RangeInclusive<u64> {
+    ) -> LookaheadRet {
         // Start computation from the earliest invalid state
-        let start_tick = current_tick.max(self.last_computed_tick);
+        let start_tick = current_tick.max(self.last_computed_tick + 1);
         let mut end_tick = current_tick + prediction_ticks;
-        // dbg!(start_tick, end_tick);
 
         let mut state =
             self.future_states.get(&(start_tick - 1)).unwrap().clone();
 
-        // let mut has_collided = false;
+        let mut interaction = None;
 
         for tick in start_tick..=end_tick {
-            let mut next_state = state.clone();
+            let event = self.events.get(&tick);
 
             // Apply any control inputs that occur at this tick
-            let event = self.events.get(&tick);
-            let mut event_to_insert = None;
-
-            next_state.apply_control_event(event);
+            state.apply_control_event(event);
 
             // Integrate after controls are applied
-            next_state = next_state.integrate(seconds_per_tick);
-
-            // Check if we collide
-            if let Some(collision) = check_for_collision(
-                e,
-                tick,
-                &next_state,
-                collider,
-                spatial_index,
-            ) {
-                dbg!(&event, &collision, e, tick, &next_state);
-                match event {
-                    None => {
-                        // apply collision, add to new_collisions and add new
-                        // event to our timeline
-                        dbg!("Applying new collision");
-                        dbg!(&event, &collision, e, tick, &next_state);
-                        next_state.apply_collision(e, &collision);
-                        event_to_insert =
-                            Some(TimelineEvent::Collision(collision.clone()));
-                        new_collisions.insert(collision.other, collision);
-                    }
-                    Some(TimelineEvent::Collision(existing_collision)) => {
-                        // Check if collision events match up
-                        // if collision is the same as event, apply the
-                        // collision and do not add to
-                        // new_collisions since we're already expecting it
-
-                        if collisions_equiv(&collision, existing_collision) {
-                            next_state.apply_collision_event(e, event);
-                        } else {
-                            // Let's assume old event is invalid now
-                            let other = if existing_collision.this == e {
-                                existing_collision.other
-                            } else {
-                                e
-                            };
-                            invalid_collisions
-                                .insert(other, existing_collision.clone());
-                        }
-                    }
-                    Some(_) => {
-                        warn!(
-                            "Adding collision event to tick with existing \
-                             event, will overwrite!"
-                        );
-                        panic!(
-                            "Adding collision event to tick with existing \
-                             non-collision event, will overwrite!"
-                        );
-                    }
-                }
-            }
-
-            // TODO: remove this hack
-            if let Some(event) = event_to_insert {
-                self.events.insert(tick, event);
-            }
+            state = state.integrate(seconds_per_tick);
 
             // Store the new state
-            state = next_state;
             self.future_states.insert(tick, state.clone());
+
+            // Assert timeline is not playing an interaction event
+            if let Some(TimelineEvent::Collision(c)) = event {
+                error!(
+                    "Invariant broken, timeline should never process an \
+                     interaction event. {tick}, {c:?}, {state:?}"
+                );
+                panic!(
+                    "Invariant broken, timeline should never process an \
+                     interaction event. {tick}, {c:?}, {state:?}"
+                );
+            }
+
+            // Stop if we're dead
             if !state.alive {
                 end_tick = tick;
-                let max_tick = *self.future_states.last_key_value().unwrap().0;
-                for tick in end_tick + 1..=max_tick {
-                    self.future_states.remove(&tick);
-                }
+                break;
+            }
+
+            // Check if we collide
+            if let Some(collision) =
+                check_for_collision(e, tick, &state, collider, spatial_index)
+            {
+                interaction =
+                    Some(InteractionLocator(([e, collision.other], tick)));
+                end_tick = tick;
                 break;
             }
         }
 
         self.last_computed_tick = end_tick;
-        start_tick..=end_tick
+
+        // Remove invalid trailing states
+        // NOTE: Should pruning old states happen before timeline update?
+        let max = *self.future_states.last_key_value().unwrap().0;
+        let removed = if end_tick != max {
+            let removed = (end_tick + 1)..=max;
+            for tick in (end_tick + 1)..=max {
+                self.future_states.remove(&tick);
+            }
+            Some(removed)
+        } else {
+            None
+        };
+
+        LookaheadRet {
+            updated: start_tick..=end_tick,
+            removed,
+            interaction,
+        }
     }
 }
 
@@ -749,6 +768,251 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_collision_remove() {
+        let tick = 1;
+        let mut spatial_index = SpatialIndex::default();
+        let col = Collider::from_dim(Vec2::new(2., 2.));
+
+        // Set up b
+        let b = Entity::from_raw(1);
+        let mut b_st = create_test_physics_state();
+        b_st.pos.x = 10.;
+        b_st.mass = 1.;
+        let mut b_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        let b_ret = b_tl.lookahead(b, 1, 1., 0, Some(&col), &spatial_index);
+        dbg!(&b_ret);
+        assert_eq!(b_ret.updated, 1..=1);
+        assert_eq!(b_ret.interaction, None);
+        let b_st_t = b_tl.future_states.get(&tick).unwrap();
+        assert_eq!(b_st_t, &PhysicsState { ..b_st });
+        assert_eq!(b_tl.events.len(), 0);
+        spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
+
+        // Set up a
+        let a = Entity::from_raw(0);
+        let mut a_st = create_test_physics_state();
+        a_st.vel.x = 10.;
+        a_st.mass = 9.;
+        let mut a_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        dbg!(&a_ret);
+        assert_eq!(a_ret.updated, 1..=1);
+        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                ..a_st
+            }
+        );
+        assert_eq!(a_tl.events.len(), 0);
+        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
+
+        resolve_collisions(
+            tick,
+            (a, Some(&col), &mut a_tl),
+            (b, Some(&col), &mut b_tl),
+            1.,
+            &mut spatial_index,
+        );
+        assert_eq!(a_tl.events.len(), 1);
+        assert_eq!(b_tl.events.len(), 1);
+
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        let b_st_t = b_tl.future_states.get(&tick).unwrap();
+        dbg!(&a_st_t, &b_st_t);
+        assert_eq!(
+            b_st_t,
+            &PhysicsState {
+                alive: false,
+                ..b_st
+            }
+        );
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                vel: Vec2::new(9., 0.),
+                alive: true,
+                ..a_st
+            }
+        );
+
+        assert!(false);
+    }
+
+    #[test]
+    fn test_resolve_collision_new() {
+        let tick = 1;
+        let mut spatial_index = SpatialIndex::default();
+        let col = Collider::from_dim(Vec2::new(2., 2.));
+
+        // Set up b
+        let b = Entity::from_raw(1);
+        let mut b_st = create_test_physics_state();
+        b_st.pos.x = 10.;
+        b_st.mass = 1.;
+        let mut b_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        // spatial_index.insert(tick, &col, SpatialItem::from_state(b, &b_st));
+        let b_ret = b_tl.lookahead(b, 1, 1., 0, Some(&col), &spatial_index);
+        dbg!(&b_ret);
+        assert_eq!(b_ret.updated, 1..=1);
+        assert_eq!(b_ret.interaction, None);
+        let b_st_t = b_tl.future_states.get(&tick).unwrap();
+        assert_eq!(b_st_t, &PhysicsState { ..b_st });
+        assert_eq!(b_tl.events.len(), 0);
+        spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
+
+        // Set up a
+        let a = Entity::from_raw(0);
+        let mut a_st = create_test_physics_state();
+        a_st.vel.x = 10.;
+        a_st.mass = 9.;
+        let mut a_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        dbg!(&a_ret);
+        assert_eq!(a_ret.updated, 1..=1);
+        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                ..a_st
+            }
+        );
+        assert_eq!(a_tl.events.len(), 0);
+        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
+
+        resolve_collisions(
+            tick,
+            (a, Some(&col), &mut a_tl),
+            (b, Some(&col), &mut b_tl),
+            1.,
+            &mut spatial_index,
+        );
+        assert_eq!(a_tl.events.len(), 1);
+        assert_eq!(b_tl.events.len(), 1);
+
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        let b_st_t = b_tl.future_states.get(&tick).unwrap();
+        dbg!(&a_st_t, &b_st_t);
+        assert_eq!(
+            b_st_t,
+            &PhysicsState {
+                alive: false,
+                ..b_st
+            }
+        );
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                vel: Vec2::new(9., 0.),
+                alive: true,
+                ..a_st
+            }
+        );
+    }
+
+    #[test]
+    fn test_lookahead_collision() {
+        let tick = 1;
+        let mut spatial_index = SpatialIndex::default();
+        let col = Collider::from_dim(Vec2::new(2., 2.));
+        let b = Entity::from_raw(1);
+        let b_spatial_item = SpatialItem {
+            entity: b,
+            pos: Vec2::new(10., 0.),
+            vel: Vec2::new(0., 0.),
+            mass: 1.,
+        };
+        spatial_index.insert(tick, &col, b_spatial_item.clone());
+
+        let a = Entity::from_raw(0);
+        let mut a_st = create_test_physics_state();
+        a_st.vel.x = 10.;
+        a_st.mass = 9.;
+
+        let mut a_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+
+        dbg!(&a_ret);
+        assert_eq!(a_ret.updated, 1..=1);
+        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                ..a_st
+            }
+        )
+    }
+
+    #[test]
+    fn test_lookahead_no_collision() {
+        let tick = 1;
+        let spatial_index = SpatialIndex::default();
+        let col = Collider::from_dim(Vec2::new(2., 2.));
+        let b = Entity::from_raw(1);
+        let b_spatial_item = SpatialItem {
+            entity: b,
+            pos: Vec2::new(20., 0.),
+            vel: Vec2::new(0., 0.),
+            mass: 1.,
+        };
+        // spatial_index.insert(tick, &col, b_spatial_item.clone());
+
+        let a = Entity::from_raw(0);
+        let mut a_st = create_test_physics_state();
+        a_st.vel.x = 10.;
+        a_st.mass = 9.;
+
+        let mut a_tl = Timeline {
+            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
+            events: BTreeMap::default(),
+            last_computed_tick: 0,
+        };
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+
+        dbg!(&a_ret);
+        assert_eq!(a_ret.updated, 1..=1);
+        assert_eq!(a_ret.interaction, None);
+
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        assert_eq!(
+            a_st_t,
+            &PhysicsState {
+                pos: Vec2::new(10., 0.),
+                ..a_st
+            }
+        )
+    }
+
+    #[test]
     fn test_physics_state_integration() {
         let delta = 1.0 / 60.0; // Standard 60 FPS timestep
 
@@ -837,155 +1101,151 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_lookahead_collision_survives() {
-        let mut prev_state = create_test_physics_state();
-        prev_state.vel.x = 10.;
-        prev_state.mass = 9.;
-
-        let mut timeline = Timeline {
-            future_states: BTreeMap::from_iter(
-                [(0, prev_state.clone())].into_iter(),
-            ),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let entity = Entity::from_raw(5);
-        let current_tick = 1;
-        let seconds_per_tick = 1.;
-        let dim = Vec2::new(2., 2.);
-        let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
-        let mut spatial_index = SpatialIndex::default();
-        let other_entity = Entity::from_raw(1009001);
-        spatial_index.insert(
-            2,
-            &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
-            SpatialItem {
-                entity: other_entity,
-                pos: Vec2::new(20., 0.),
-                vel: Vec2::new(0., 0.),
-                mass: 1.,
-            },
-        );
-        let mut new_collisions = EntityHashMap::default();
-        let mut invalidations = EntityHashMap::default();
-
-        timeline.lookahead(
-            entity,
-            current_tick,
-            seconds_per_tick,
-            10,
-            collider.as_ref(),
-            &spatial_index,
-            &mut new_collisions,
-            &mut invalidations,
-        );
-
-        dbg!(&new_collisions);
-        dbg!(&timeline.events);
-
-        let next_state = timeline.future_states.get(&(current_tick)).unwrap();
-        let expected = PhysicsState {
-            pos: Vec2::new(10., 0.),
-            ..prev_state
-        };
-        assert_eq!(next_state, &expected);
-
-        let others_collision = new_collisions.get(&other_entity).unwrap();
-        assert_eq!(
-            others_collision,
-            &Collision {
-                tick: 2,
-                this: entity,
-                this_result: EntityCollisionResult::Survives {
-                    post_pos: Vec2::new(20., 0.),
-                    post_vel: Vec2::new(9., 0.),
-                },
-                other: other_entity,
-                other_result: EntityCollisionResult::Destroyed
-            }
-        );
-
-        let expected = PhysicsState {
-            pos: Vec2::new(29., 0.),
-            vel: Vec2::new(9., 0.),
-            ..prev_state
-        };
-        assert_eq!(timeline.future_states.get(&3), Some(&expected));
-        assert_eq!(timeline.future_states.get(&2).unwrap().alive, true);
-    }
-
-    #[test]
-    fn test_lookahead_collision_destroyed() {
-        let mut prev_state = create_test_physics_state();
-        prev_state.vel.x = 10.;
-
-        let mut timeline = Timeline {
-            future_states: BTreeMap::from_iter(
-                [(0, prev_state.clone())].into_iter(),
-            ),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let entity = Entity::from_raw(5);
-        let current_tick = 1;
-        let seconds_per_tick = 1.;
-        let dim = Vec2::new(2., 2.);
-        let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
-        let mut spatial_index = SpatialIndex::default();
-        let other_entity = Entity::from_raw(1009001);
-        spatial_index.insert(
-            2,
-            &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
-            SpatialItem {
-                entity: other_entity,
-                pos: Vec2::new(20., 0.),
-                vel: Vec2::new(0., 0.),
-                mass: 2.,
-            },
-        );
-        let mut new_collisions = EntityHashMap::default();
-        let mut invalidations = EntityHashMap::default();
-
-        timeline.lookahead(
-            entity,
-            current_tick,
-            seconds_per_tick,
-            10,
-            collider.as_ref(),
-            &spatial_index,
-            &mut new_collisions,
-            &mut invalidations,
-        );
-
-        dbg!(&new_collisions);
-        dbg!(&timeline.events);
-
-        let next_state = timeline.future_states.get(&(current_tick)).unwrap();
-        let expected = PhysicsState {
-            pos: Vec2::new(10., 0.),
-            ..prev_state
-        };
-        assert_eq!(next_state, &expected);
-
-        let others_collision = new_collisions.get(&other_entity).unwrap();
-        assert_eq!(
-            others_collision,
-            &Collision {
-                tick: 2,
-                this: entity,
-                this_result: EntityCollisionResult::Destroyed,
-                other: other_entity,
-                other_result: EntityCollisionResult::Survives {
-                    post_pos: Vec2::new(20., 0.),
-                    post_vel: Vec2::new(10. / 3., 0.),
-                }
-            }
-        );
-
-        assert_eq!(timeline.future_states.get(&3), None);
-        assert_eq!(timeline.future_states.get(&2).unwrap().alive, false);
-    }
+    // #[test]
+    // fn test_lookahead_collision_survives() {
+    // let mut prev_state = create_test_physics_state();
+    // prev_state.vel.x = 10.;
+    // prev_state.mass = 9.;
+    //
+    // let mut timeline = Timeline {
+    // future_states: BTreeMap::from_iter(
+    // [(0, prev_state.clone())].into_iter(),
+    // ),
+    // events: BTreeMap::default(),
+    // last_computed_tick: 0,
+    // };
+    // let entity = Entity::from_raw(5);
+    // let current_tick = 1;
+    // let seconds_per_tick = 1.;
+    // let dim = Vec2::new(2., 2.);
+    // let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
+    // let mut spatial_index = SpatialIndex::default();
+    // let other_entity = Entity::from_raw(1009001);
+    // spatial_index.insert(
+    // 2,
+    // &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
+    // SpatialItem {
+    // entity: other_entity,
+    // pos: Vec2::new(20., 0.),
+    // vel: Vec2::new(0., 0.),
+    // mass: 1.,
+    // },
+    // );
+    //
+    // let ret = timeline.lookahead(
+    // entity,
+    // current_tick,
+    // seconds_per_tick,
+    // 10,
+    // collider.as_ref(),
+    // &spatial_index,
+    // );
+    //
+    // dbg!(&ret);
+    // dbg!(&timeline.events);
+    //
+    // let next_state = timeline.future_states.get(&(current_tick)).unwrap();
+    // let expected = PhysicsState {
+    // pos: Vec2::new(10., 0.),
+    // ..prev_state
+    // };
+    // assert_eq!(next_state, &expected);
+    //
+    // let others_collision = new_collisions.get(&other_entity).unwrap();
+    // assert_eq!(
+    // others_collision,
+    // &Collision {
+    // tick: 2,
+    // this: entity,
+    // this_result: EntityCollisionResult::Survives {
+    // post_pos: Vec2::new(20., 0.),
+    // post_vel: Vec2::new(9., 0.),
+    // },
+    // other: other_entity,
+    // other_result: EntityCollisionResult::Destroyed
+    // }
+    // );
+    //
+    // let expected = PhysicsState {
+    // pos: Vec2::new(29., 0.),
+    // vel: Vec2::new(9., 0.),
+    // ..prev_state
+    // };
+    // assert_eq!(timeline.future_states.get(&3), Some(&expected));
+    // assert_eq!(timeline.future_states.get(&2).unwrap().alive, true);
+    // }
+    //
+    // #[test]
+    // fn test_lookahead_collision_destroyed() {
+    // let mut prev_state = create_test_physics_state();
+    // prev_state.vel.x = 10.;
+    //
+    // let mut timeline = Timeline {
+    // future_states: BTreeMap::from_iter(
+    // [(0, prev_state.clone())].into_iter(),
+    // ),
+    // events: BTreeMap::default(),
+    // last_computed_tick: 0,
+    // };
+    // let entity = Entity::from_raw(5);
+    // let current_tick = 1;
+    // let seconds_per_tick = 1.;
+    // let dim = Vec2::new(2., 2.);
+    // let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
+    // let mut spatial_index = SpatialIndex::default();
+    // let other_entity = Entity::from_raw(1009001);
+    // spatial_index.insert(
+    // 2,
+    // &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
+    // SpatialItem {
+    // entity: other_entity,
+    // pos: Vec2::new(20., 0.),
+    // vel: Vec2::new(0., 0.),
+    // mass: 2.,
+    // },
+    // );
+    // let mut new_collisions = EntityHashMap::default();
+    // let mut invalidations = EntityHashMap::default();
+    //
+    // timeline.lookahead(
+    // entity,
+    // current_tick,
+    // seconds_per_tick,
+    // 10,
+    // collider.as_ref(),
+    // &spatial_index,
+    // &mut new_collisions,
+    // &mut invalidations,
+    // );
+    //
+    // dbg!(&new_collisions);
+    // dbg!(&timeline.events);
+    //
+    // let next_state = timeline.future_states.get(&(current_tick)).unwrap();
+    // let expected = PhysicsState {
+    // pos: Vec2::new(10., 0.),
+    // ..prev_state
+    // };
+    // assert_eq!(next_state, &expected);
+    //
+    // let others_collision = new_collisions.get(&other_entity).unwrap();
+    // assert_eq!(
+    // others_collision,
+    // &Collision {
+    // tick: 2,
+    // this: entity,
+    // this_result: EntityCollisionResult::Destroyed,
+    // other: other_entity,
+    // other_result: EntityCollisionResult::Survives {
+    // post_pos: Vec2::new(20., 0.),
+    // post_vel: Vec2::new(10. / 3., 0.),
+    // }
+    // }
+    // );
+    //
+    // assert_eq!(timeline.future_states.get(&3), None);
+    // assert_eq!(timeline.future_states.get(&2).unwrap().alive, false);
+    // }
 
     #[test]
     fn test_lookahead() {
@@ -1004,18 +1264,14 @@ mod tests {
         let seconds_per_tick = 1.;
         let collider = None;
         let spatial_index = SpatialIndex::default();
-        let mut new_collisions = EntityHashMap::default();
-        let mut invalidations = EntityHashMap::default();
 
-        timeline.lookahead(
+        let ret = timeline.lookahead(
             entity,
             current_tick,
             seconds_per_tick,
             120,
             collider,
             &spatial_index,
-            &mut new_collisions,
-            &mut invalidations,
         );
 
         let next_state = timeline.future_states.get(&(current_tick)).unwrap();

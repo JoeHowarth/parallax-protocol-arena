@@ -1,5 +1,7 @@
+use std::ops::RangeInclusive;
+
 use bevy::color::palettes::css;
-use physics::PhysicsState;
+use physics::{PhysicsState, Timeline};
 use rtree_rs::RTree;
 use utils::intersect_ray_aabb;
 
@@ -50,6 +52,17 @@ pub struct SpatialItem {
     pub pos: Vec2,
     pub vel: Vec2,
     pub mass: f32,
+}
+
+impl SpatialItem {
+    pub fn from_state(entity: Entity, state: &PhysicsState) -> SpatialItem {
+        SpatialItem {
+            entity,
+            pos: state.pos,
+            vel: state.vel,
+            mass: state.mass,
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -123,6 +136,46 @@ impl SpatialIndex {
     ) {
         let index = self.0.entry(tick).or_insert_with(default);
         index.insert(collider, item);
+    }
+
+    pub fn remove(&mut self, tick: u64, entity: &Entity) {
+        let Some(index) = self.0.get_mut(&tick) else {
+            return;
+        };
+        index.remove(entity);
+        if index.e_map.is_empty() {
+            self.0.remove(&tick);
+        }
+    }
+
+    pub fn patch(
+        &mut self,
+        e: Entity,
+        timeline: &Timeline,
+        collider: &Collider,
+        updated: RangeInclusive<u64>,
+        removed: Option<RangeInclusive<u64>>,
+    ) {
+        if let Some(removed) = removed {
+            for tick in removed {
+                self.remove(tick, &e);
+            }
+        }
+
+        for tick in updated {
+            // eprintln!("Inserting into spatial index {tick}");
+            let state = timeline.future_states.get(&tick).unwrap();
+            self.insert(
+                tick,
+                collider,
+                SpatialItem {
+                    entity: e,
+                    pos: state.pos,
+                    vel: state.vel,
+                    mass: state.mass,
+                },
+            );
+        }
     }
 }
 
