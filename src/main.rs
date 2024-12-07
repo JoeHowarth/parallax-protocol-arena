@@ -32,12 +32,15 @@ fn main() {
         ))
         .add_plugins((
             PhysicsSimulationPlugin {
-                config: SimulationConfig {
-                    ticks_per_second: 60,
-                    time_dilation: 1.,
-                    prediction_ticks: 120,
-                    ..default()
-                },
+                config: (|| {
+                    let tps = 30;
+                    SimulationConfig {
+                        ticks_per_second: tps,
+                        time_dilation: 0.1,
+                        prediction_ticks: tps * 2,
+                        ..default()
+                    }
+                })(),
                 schedule: FixedUpdate,
             },
             AsteroidPlugin,
@@ -511,27 +514,19 @@ fn handle_engine_input(
                 world_drag.to_angle(),
             )),
         );
-        preview.timeline.last_computed_tick = preview.start_tick;
+        preview.timeline.last_computed_tick = preview.start_tick - 1;
 
         // let mut invalidations = EntityHashMap::default();
         // let mut new_collisions = EntityHashMap::default();
         // // FIXME: Does this even make sense?
-        // preview.timeline.lookahead(
-        //     craft_entity,
-        //     simulation_config.current_tick,
-        //     1.0 / simulation_config.ticks_per_second as f32,
-        //     simulation_config.prediction_ticks,
-        //     collider,
-        //     &spatial_index,
-        //     &mut new_collisions,
-        //     &mut invalidations,
-        // );
-        // if new_collisions.len() > 0 {
-        //     info!("New collisions non-zero during preview");
-        // }
-        // if invalidations.len() > 0 {
-        //     info!("Collision invalidations non-zero during preview");
-        // }
+        preview.timeline.lookahead(
+            craft_entity,
+            simulation_config.current_tick,
+            1.0 / simulation_config.ticks_per_second as f32,
+            simulation_config.prediction_ticks,
+            collider,
+            &spatial_index,
+        );
         info!("drag loop over");
     }
 

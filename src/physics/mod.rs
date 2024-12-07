@@ -112,7 +112,7 @@ pub struct TimelineEventRequest {
 }
 
 /// Control inputs that can be scheduled to modify entity behavior
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ControlInput {
     /// Set thrust level between -1.0 and 1.0
     SetThrust(f32),
@@ -123,7 +123,7 @@ pub enum ControlInput {
     SetThrustAndRotation(f32, f32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TimelineEvent {
     Control(ControlInput),
     Collision(Collision),
@@ -259,7 +259,8 @@ fn process_timeline_events(
         };
         // just insert with binary search in the future
         let prev_last_computed_tick = timeline.last_computed_tick;
-        timeline.last_computed_tick = timeline.last_computed_tick.min(*tick);
+        timeline.last_computed_tick =
+            timeline.last_computed_tick.min(*tick - 1);
         timeline
             .events
             .insert(*tick, TimelineEvent::Control(*input));
@@ -403,9 +404,9 @@ fn compute_future_states(
 
     let mut interaction = None;
 
-    for i in 0..5 {
+    for i in 0..3 {
         let tick = simulation_config.current_tick;
-        eprintln!("{i}th iter");
+        eprintln!("\n[{i}th Iteration]\n");
         for (e, collider, current_state, mut timeline) in query.iter_mut() {
             // ensure timline has value for current tick
             if !timeline.future_states.contains_key(&(tick - 1)) {
@@ -435,9 +436,9 @@ fn compute_future_states(
                 );
             }
 
-            if ret.interaction.is_some() {
+            interaction = ret.interaction;
+            if interaction.is_some() {
                 // Eject and resolve interaction
-                interaction = ret.interaction;
                 break;
             }
         }
@@ -535,7 +536,12 @@ impl Timeline {
     ) -> LookaheadRet {
         // Start computation from the earliest invalid state
         let start_tick = current_tick.max(self.last_computed_tick + 1);
-        let mut end_tick = current_tick + prediction_ticks;
+        let mut end_tick = start_tick.max(current_tick + prediction_ticks);
+        eprintln!(
+            "start: {start_tick}, end: {end_tick}, current: {current_tick}, \
+             last_computed: {}",
+            self.last_computed_tick
+        );
 
         let mut state =
             self.future_states.get(&(start_tick - 1)).unwrap().clone();
@@ -566,6 +572,7 @@ impl Timeline {
 
             // Stop if we're dead
             if !state.alive {
+                eprintln!("dead");
                 end_tick = tick;
                 break;
             }
@@ -574,6 +581,7 @@ impl Timeline {
             if let Some(collision) =
                 check_for_collision(e, tick, &state, collider, spatial_index)
             {
+                eprintln!("found new collision, {tick}");
                 interaction =
                     Some(InteractionLocator(([e, collision.other], tick)));
                 end_tick = tick;
@@ -1330,71 +1338,105 @@ mod tests {
         let mut app = create_test_app();
         app.world_mut()
             .resource_mut::<SimulationConfig>()
-            .prediction_ticks = 4;
+            .prediction_ticks = 2;
         app.world_mut()
             .resource_mut::<SimulationConfig>()
             .ticks_per_second = 1;
 
         // Spawn an entity with physics components
+        let mut b_st = create_test_physics_state();
+        b_st.pos.x = 30.;
+        b_st.mass = 1.;
+        let dim = Vec2::splat(2.);
 
-        let entity = app
+        let b = app
             .world_mut()
-            .spawn(PhysicsBundle::from_state(
-                PhysicsState {
-                    vel: Vec2::new(10., 0.),
-                    ..create_test_physics_state()
-                },
-                Vec2::splat(2.),
-                // [(2, TimelineEvent::Control(ControlInput::SetThrust(1.0)))]
-                //     .into_iter(),
-            ))
+            .spawn(PhysicsBundle::from_state(b_st.clone(), dim))
             .id();
 
-        let other_entity = app
+        let mut a_st = create_test_physics_state();
+        a_st.vel.x = 10.;
+        a_st.mass = 9.;
+        let a = app
             .world_mut()
-            .spawn(PhysicsBundle::from_state(
-                PhysicsState {
-                    pos: Vec2::new(30., 0.),
-                    mass: 3.,
-                    ..create_test_physics_state()
-                },
-                Vec2::splat(2.),
-            ))
+            .spawn(PhysicsBundle::from_state(a_st.clone(), dim))
             .id();
 
         // Run the system once
         app.update();
-        let world = app.world();
+        {
+            let world = app.world();
 
-        // Get the resulting timeline component
-        let timeline = world
-            .entity(entity)
-            .get::<Timeline>()
-            .expect("Timeline component should exist");
+            // Get the resulting timeline component
+            let a_tl = world
+                .entity(a)
+                .get::<Timeline>()
+                .expect("Timeline component should exist");
 
-        dbg!(&timeline.events);
+            dbg!(&a_tl.events);
 
-        let other_timeline = world
-            .entity(other_entity)
-            .get::<Timeline>()
-            .expect("Timeline component should exist");
+            let b_tl = world
+                .entity(b)
+                .get::<Timeline>()
+                .expect("Timeline component should exist");
 
-        dbg!(&other_timeline.events);
+            dbg!(&b_tl.events);
+            assert_eq!(b_tl.events, a_tl.events);
+            assert_eq!(b_tl.future_states.get(&3).unwrap().alive, false);
+            assert_eq!(a_tl.future_states.get(&3).unwrap().alive, true);
+            assert_eq!(
+                a_tl.future_states.get(&3).unwrap().pos,
+                Vec2::new(30., 0.)
+            );
+        }
 
-        dbg!(timeline
-            .future_states
-            .iter()
-            .map(|s| s.1.pos.x)
-            .collect::<Vec<_>>());
-        dbg!(other_timeline
-            .future_states
-            .iter()
-            .map(|s| s.1.pos.x)
-            .collect::<Vec<_>>());
+        eprintln!(
+            "\n==========================\nNow we add a control input that \
+             avoids the collision\n==========================="
+        );
+        {
+            let world = app.world_mut();
+            let mut a = world.entity_mut(a);
+            let mut a_tl = a.get_mut::<Timeline>().unwrap();
+            a_tl.events.insert(
+                2,
+                TimelineEvent::Control(ControlInput::SetThrustAndRotation(
+                    0.9, PI,
+                )),
+            );
+            a_tl.last_computed_tick = 1;
+        }
+        app.update();
 
-        // Verify states were computed
-        assert!(!timeline.future_states.is_empty());
-        assert_eq!(timeline.last_computed_tick, 3);
+        {
+            let world = app.world();
+
+            // Get the resulting timeline component
+            let a_tl = world
+                .entity(a)
+                .get::<Timeline>()
+                .expect("Timeline component should exist");
+
+            dbg!(&a_tl.events);
+
+            let b_tl = world
+                .entity(b)
+                .get::<Timeline>()
+                .expect("Timeline component should exist");
+
+            dbg!(&b_tl.events);
+            assert_eq!(a_tl.events.len(), 1);
+            assert_eq!(
+                a_tl.events.get(&2),
+                Some(&TimelineEvent::Control(
+                    ControlInput::SetThrustAndRotation(0.9, PI,)
+                ))
+            );
+            assert_eq!(b_tl.future_states.get(&3).unwrap().alive, true);
+            assert_eq!(a_tl.future_states.get(&3).unwrap().alive, true);
+            assert_approx_eq!(a_tl.future_states.get(&3).unwrap().pos.x, 20.);
+            assert_approx_eq!(a_tl.future_states.get(&3).unwrap().pos.y, 0.);
+        }
     }
 
     #[test]
