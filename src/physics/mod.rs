@@ -474,11 +474,12 @@ fn resolve_collisions(
     // STEP 1: Remove B's state and replay tick t
 
     // FIXME: check this is an interaction event
+    a_tl.events.remove(&tick);
     b_tl.events.remove(&tick);
     b_tl.last_computed_tick = tick - 1;
 
     let b_ret =
-        b_tl.lookahead(b_e, tick, seconds_per_tick, 2, b_col, &spatial_index);
+        b_tl.lookahead(b_e, tick, seconds_per_tick, 0, b_col, &spatial_index);
     // TODO: Make collider non-optional
     let a_col = a_col.expect("Must have colider to be part of interaction");
     let b_col = b_col.expect("Must have colider to be part of interaction");
@@ -553,16 +554,14 @@ impl Timeline {
             // Store the new state
             self.future_states.insert(tick, state.clone());
 
-            // Assert timeline is not playing an interaction event
             if let Some(TimelineEvent::Collision(c)) = event {
-                error!(
-                    "Invariant broken, timeline should never process an \
-                     interaction event. {tick}, {c:?}, {state:?}"
+                eprintln!(
+                    "Timeline encountered and interaction event. Ejecting for \
+                     resolution. {tick}, {c:?}, {state:?}"
                 );
-                panic!(
-                    "Invariant broken, timeline should never process an \
-                     interaction event. {tick}, {c:?}, {state:?}"
-                );
+                interaction = Some(InteractionLocator(([e, c.other], tick)));
+                end_tick = tick;
+                break;
             }
 
             // Stop if we're dead
@@ -769,23 +768,23 @@ mod tests {
 
     #[test]
     fn test_resolve_collision_remove() {
-        let tick = 1;
+        let tick = 2;
         let mut spatial_index = SpatialIndex::default();
         let col = Collider::from_dim(Vec2::new(2., 2.));
 
         // Set up b
         let b = Entity::from_raw(1);
         let mut b_st = create_test_physics_state();
-        b_st.pos.x = 10.;
+        b_st.pos.x = 20.;
         b_st.mass = 1.;
         let mut b_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let b_ret = b_tl.lookahead(b, 1, 1., 0, Some(&col), &spatial_index);
+        let b_ret = b_tl.lookahead(b, 1, 1., 1, Some(&col), &spatial_index);
         dbg!(&b_ret);
-        assert_eq!(b_ret.updated, 1..=1);
+        assert_eq!(b_ret.updated, 1..=2);
         assert_eq!(b_ret.interaction, None);
         let b_st_t = b_tl.future_states.get(&tick).unwrap();
         assert_eq!(b_st_t, &PhysicsState { ..b_st });
@@ -802,21 +801,23 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 1, Some(&col), &spatial_index);
         dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+        assert_eq!(a_ret.updated, 1..=2);
+        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], tick))));
         let a_st_t = a_tl.future_states.get(&tick).unwrap();
         assert_eq!(
             a_st_t,
             &PhysicsState {
-                pos: Vec2::new(10., 0.),
+                pos: Vec2::new(20., 0.),
                 ..a_st
             }
         );
         assert_eq!(a_tl.events.len(), 0);
         spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
 
+        // We expect a collision at tick t where b is destroyed and a's velocity
+        // is reduced
         resolve_collisions(
             tick,
             (a, Some(&col), &mut a_tl),
@@ -840,14 +841,56 @@ mod tests {
         assert_eq!(
             a_st_t,
             &PhysicsState {
-                pos: Vec2::new(10., 0.),
+                pos: Vec2::new(20., 0.),
                 vel: Vec2::new(9., 0.),
                 alive: true,
                 ..a_st
             }
         );
 
-        assert!(false);
+        // Simulate a user input to avoid the collision at the previous tick
+        a_tl.events.insert(
+            1,
+            // cancel 10 vel/tick
+            TimelineEvent::Control(ControlInput::SetThrustAndRotation(0.9, PI)),
+        );
+        a_tl.last_computed_tick = 0;
+
+        // Re-run lookahead
+        // We expect it to find the old, invalid collision event and eject
+        let a_ret = a_tl.lookahead(a, 1, 1., 1, Some(&col), &spatial_index);
+        dbg!(&a_ret);
+        assert_eq!(a_ret.updated, 1..=tick);
+        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], tick))));
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        assert_eq!(a_st_t.pos.x, 10.);
+        assert_eq!(a_st_t.vel.x, -10.);
+        assert_eq!(a_st_t.alive, true);
+        assert_eq!(a_tl.events.len(), 2);
+        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
+
+        // We expect to not collide
+        // a and b should have the collision events removed
+        resolve_collisions(
+            tick,
+            (a, Some(&col), &mut a_tl),
+            (b, Some(&col), &mut b_tl),
+            1.,
+            &mut spatial_index,
+        );
+
+        dbg!(&a_tl.events, &b_tl.events);
+
+        assert_eq!(a_tl.events.len(), 1);
+        assert_eq!(b_tl.events.len(), 0);
+
+        let a_st_t = a_tl.future_states.get(&tick).unwrap();
+        let b_st_t = b_tl.future_states.get(&tick).unwrap();
+        dbg!(&a_st_t, &b_st_t);
+        assert_eq!(b_st_t, &PhysicsState { ..b_st });
+        assert_eq!(a_st_t.pos.x, 10.);
+        assert_eq!(a_st_t.vel.x, -10.);
+        assert_eq!(a_st_t.alive, true);
     }
 
     #[test]
