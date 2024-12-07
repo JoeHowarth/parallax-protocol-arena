@@ -4,7 +4,7 @@ use bevy::{
     ecs::component::{RequiredComponent, RequiredComponentConstructor},
     sprite::Anchor,
 };
-use physics::PhysicsState;
+use physics::{PhysicsBundle, PhysicsState};
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::Value;
@@ -41,12 +41,18 @@ impl SmallAsteroid {
                     index: 0,
                 },
             ),
-            PhysicsState {
-                position,
-                velocity,
-                mass: 10.,
-                ..default()
-            },
+            Transform::from_scale(Vec3::new(1., 1., 1.))
+                .with_translation(position.to3()),
+            PhysicsBundle::from_state(
+                PhysicsState {
+                    pos: position,
+                    vel: velocity,
+                    mass: 10.,
+                    alive: true,
+                    ..default()
+                },
+                Vec2::new(28., 28.),
+            ),
         )
     }
 

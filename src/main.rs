@@ -34,9 +34,10 @@ fn main() {
             PhysicsSimulationPlugin {
                 config: SimulationConfig {
                     ticks_per_second: 10,
-                    time_dilation: 0.25,
+                    time_dilation: 0.1,
                     ..default()
                 },
+                schedule: FixedUpdate,
             },
             AsteroidPlugin,
         ))
@@ -78,22 +79,25 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
     ));
 
-    commands.spawn(ship_bundle(
-        "Ship_rotated.png",
-        10.,
-        32.,
-        Faction::Red,
-        Vec2::new(10., 10.),
-        &asset_server,
-    ));
-    commands.spawn(ship_bundle(
-        "Ship_rotated.png",
-        10.,
-        32.,
-        Faction::Red,
-        Vec2::new(-10., -10.),
-        &asset_server,
-    ));
+    let ship_e = commands
+        .spawn(ship_bundle(
+            "Ship_rotated.png",
+            10.,
+            32.,
+            Faction::Red,
+            Vec2::new(10., 10.),
+            &asset_server,
+        ))
+        .id();
+    info!(ship_entity = ship_e.index(), "Ship Entity");
+    // commands.spawn(ship_bundle(
+    //     "Ship_rotated.png",
+    //     10.,
+    //     32.,
+    //     Faction::Red,
+    //     Vec2::new(-10., -10.),
+    //     &asset_server,
+    // ));
 
     commands.queue(SmallAsteroid::spawn(
         Vec2::new(40., 20.),
@@ -106,63 +110,43 @@ pub fn ship_bundle(
     radius: f32,
     px: f32,
     faction: Faction,
-    loc: Vec2,
+    pos: Vec2,
     asset_server: &AssetServer,
 ) -> impl Bundle {
     (
         faction,
-                Transform::from_translation(Vec3::from2(loc)) //
-                    .with_scale(Vec3::new(
-                        2. * radius / px,
-                        2. * radius / px,
-                        1.,
-                    )),
-            Sprite {
-                image: asset_server.load(sprite_name),
-                color: faction.sprite_color(),
-                ..default()
+        Transform::from_translation(Vec3::from2(pos)).with_scale(Vec3::new(
+            2. * radius / px,
+            2. * radius / px,
+            1.,
+        )),
+        Sprite {
+            image: asset_server.load(sprite_name),
+            color: faction.sprite_color(),
+            ..default()
+        },
+        PhysicsBundle::new_with_events(
+            PhysicsState {
+                pos,
+                vel: Vec2::ZERO,
+                ang_vel: 0.,
+                rotation: 0.,
+                mass: 1.,
+                current_thrust: 0.,
+                max_thrust: 100.,
+                alive: true,
             },
-        PhysicsState {
-            position: loc,
-            velocity: Vec2::ZERO,
-            angular_velocity: 0.,
-            rotation: 0.,
-            mass: 1.,
-            current_thrust: 0.,
-            max_thrust: 100.,
-            alive: true
-        },
-        Timeline {
-            events: BTreeMap::from_iter(
-                [
-                    (5, TimelineEvent::Control(ControlInput::SetThrust(1.))),
-                    (20, TimelineEvent::Control(ControlInput::SetThrust(0.))),
-                    (60, TimelineEvent::Control(ControlInput::SetRotation(PI))),
-                    (61, TimelineEvent::Control(ControlInput::SetAngVel(0.1))),
-                    (65, TimelineEvent::Control(ControlInput::SetThrust(1.))),
-                    (80, TimelineEvent::Control(ControlInput::SetThrust(0.1))),
-                ]
-                .into_iter(),
-            ),
-            // TODO: clean this up
-            future_states: BTreeMap::from_iter(
-                [(
-                    1,
-                    PhysicsState {
-                        position: loc,
-                        velocity: Vec2::ZERO,
-                        angular_velocity: 0.,
-                        rotation: 0.,
-                        mass: 1.,
-                        current_thrust: 0.,
-                        max_thrust: 100.,
-                        alive: true
-                    },
-                )]
-                .into_iter(),
-            ),
-            last_computed_tick: 1,
-        },
+            Vec2::new(px, px),
+            [
+                (2, TimelineEvent::Control(ControlInput::SetThrust(1.))),
+                (20, TimelineEvent::Control(ControlInput::SetThrust(0.))),
+                (60, TimelineEvent::Control(ControlInput::SetRotation(PI))),
+                (61, TimelineEvent::Control(ControlInput::SetAngVel(0.1))),
+                (65, TimelineEvent::Control(ControlInput::SetThrust(1.))),
+                (80, TimelineEvent::Control(ControlInput::SetThrust(0.1))),
+            ]
+            .into_iter(),
+        ),
     )
 }
 
@@ -202,7 +186,7 @@ fn update_event_markers(
             let Some(state) = timeline.future_states.get(&tick) else {
                 continue;
             };
-            let position = state.position;
+            let position = state.pos;
 
             used_keys.insert((timeline_entity, tick));
 
@@ -232,12 +216,8 @@ fn update_event_markers(
                         )
                     }
                 },
-                TimelineEvent::Physics(ref physics_event) => {
-                    match physics_event {
-                        PhysicsEvent::Collision(_collision) => {
-                            (css::DARK_SALMON.into(), 20_f32, state.rotation)
-                        }
-                    }
+                TimelineEvent::Collision(ref _collision) => {
+                    (css::DARK_SALMON.into(), 20_f32, state.rotation)
                 }
             };
 
@@ -404,7 +384,7 @@ fn update_trajectory(
     let positions = timeline
         .future_states
         .iter()
-        .map(|(tick, state)| (*tick, state.position))
+        .map(|(tick, state)| (*tick, state.pos))
         .collect::<Vec<_>>();
 
     if positions.len() >= 2 {
@@ -475,7 +455,7 @@ fn handle_engine_input(
     mut drag_end_r: EventReader<Pointer<DragEnd>>,
     mut drag_r: EventReader<Pointer<Drag>>,
     segments: Query<&TrajectorySegment>,
-    timelines: Query<(&Collider, &Timeline)>,
+    timelines: Query<(Option<&Collider>, &Timeline)>,
     mut preview: Option<ResMut<TrajectoryPreview>>,
     mut timeline_event_writer: EventWriter<TimelineEventRequest>,
     mut commands: Commands,
@@ -528,13 +508,16 @@ fn handle_engine_input(
         preview.timeline.last_computed_tick = preview.start_tick;
 
         let mut invalidations = EntityHashMap::default();
-        let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
+        let mut new_collisions = EntityHashMap::default();
+        // FIXME: Does this even make sense?
         preview.timeline.lookahead(
             drag.target,
             simulation_config.current_tick,
-            seconds_per_tick,
-            &collider,
+            1.0 / simulation_config.ticks_per_second as f32,
+            simulation_config.prediction_ticks,
+            collider,
             &spatial_index,
+            &mut new_collisions,
             &mut invalidations,
         );
         if invalidations.len() > 0 {

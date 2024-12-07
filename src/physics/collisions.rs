@@ -1,3 +1,5 @@
+use bevy::color::palettes::css;
+use physics::PhysicsState;
 use rtree_rs::RTree;
 use utils::intersect_ray_aabb;
 
@@ -31,25 +33,64 @@ pub struct SpatialItem {
 
 #[derive(Resource, Default)]
 // pub struct SpatialIndex(pub EntityHashMap<BTreeMap<u64, BoundingBox>>);
-pub struct SpatialIndex(pub BTreeMap<u64, RTree<2, f32, SpatialItem>>);
+pub struct SpatialIndex(pub BTreeMap<u64, SpatialIndexPerTick>);
+
+pub struct SpatialIndexPerTick {
+    e_map: EntityHashMap<(RRect, SpatialItem)>,
+    rtree: RTree<2, f32, Entity>,
+}
+
+impl Default for SpatialIndexPerTick {
+    fn default() -> Self {
+        Self {
+            e_map: default(),
+            rtree: RTree::new(),
+        }
+    }
+}
+
+impl SpatialIndexPerTick {
+    fn remove(&mut self, entity: &Entity) {
+        let Some((rect, item)) = self.e_map.remove(entity) else {
+            return;
+        };
+        self.rtree.remove(rect, entity);
+    }
+}
 
 impl SpatialIndex {
     pub fn collides(
         &self,
+        entity: Entity,
         tick: u64,
         pos: Vec2,
-        rect: &Collider,
+        collider: &Collider,
     ) -> Option<(RRect, SpatialItem)> {
+        // info!("Checking collisions...");
+        let rect = collider.transalate(pos).to_rtree();
         self.0.get(&tick).and_then(|index| {
             index
-                .search(rect.to_rtree().transalate(pos))
+                .rtree
+                .search(rect)
                 .next()
-                .map(|item| (item.rect, item.data.clone()))
+                .filter(|e| e.data != &entity)
+                .and_then(|e| index.e_map.get(e.data).cloned())
         })
     }
 
-    pub fn insert(&mut self, tick: u64, rect: Rect, entity: Entity) {
-        todo!()
+    pub fn insert(
+        &mut self,
+        tick: u64,
+        collider: &Collider,
+        item: SpatialItem,
+    ) {
+        let index = self.0.entry(tick).or_insert_with(default);
+
+        index.remove(&item.entity);
+
+        let rect = collider.0.transalate(item.pos).to_rtree();
+        index.rtree.insert(rect, item.entity);
+        index.e_map.insert(item.entity, (rect, item));
     }
 }
 
@@ -134,8 +175,8 @@ mod tests {
     #[test]
     fn test_diagonal_velocity() {
         let v = Vec2::new(30.0, 40.0); // 50 m/s magnitude
-        let (q1, q2) = calculate_impact_energy(1000.0, 100.0, v);
-        assert!((q1 - 125.0).abs() < 0.1);
+        let (q1, q2) = calculate_impact_energy(1000.0, 1000.0, v);
+        assert!((q1 - 1250.0).abs() < 0.1);
         assert!((q2 - 1250.0).abs() < 0.1);
     }
     // fn create_box(
