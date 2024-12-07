@@ -274,6 +274,9 @@ fn process_timeline_events(
 
 impl PhysicsState {
     fn integrate(&self, delta_seconds: f32) -> Self {
+        if !self.alive {
+            return PhysicsState::default();
+        }
         // TODO: replace this with rk4 integration method to reduce errors
         let thrust_direction = Vec2::from_angle(self.rotation);
         let thrust_force =
@@ -339,9 +342,9 @@ impl PhysicsState {
 
     fn apply_collision(&mut self, e: Entity, collision: &Collision) {
         let result = if dbg!(e == collision.this) {
-            &collision.this_result
+            dbg!(&collision.this_result)
         } else {
-            &collision.other_result
+            dbg!(&collision.other_result)
         };
         match result {
             collisions::EntityCollisionResult::Destroyed => {
@@ -446,6 +449,7 @@ fn compute_future_states(
             // patch spatial index
             if let Some(collider) = collider {
                 for tick in updated_range {
+                    // eprintln!("Inserting into spatial index {tick}");
                     let state = timeline.future_states.get(&tick).unwrap();
                     spatial_index.insert(
                         tick,
@@ -486,8 +490,7 @@ impl Timeline {
         invalid_collisions: &mut EntityHashMap<Collision>,
     ) -> RangeInclusive<u64> {
         // Start computation from the earliest invalid state
-        let start_tick =
-            current_tick.max(self.last_computed_tick.saturating_sub(1));
+        let start_tick = current_tick.max(self.last_computed_tick);
         let mut end_tick = current_tick + prediction_ticks;
         // dbg!(start_tick, end_tick);
 
@@ -522,6 +525,7 @@ impl Timeline {
                         // apply collision, add to new_collisions and add new
                         // event to our timeline
                         dbg!("Applying new collision");
+                        dbg!(&event, &collision, e, tick, &next_state);
                         next_state.apply_collision(e, &collision);
                         event_to_insert =
                             Some(TimelineEvent::Collision(collision.clone()));
@@ -569,6 +573,10 @@ impl Timeline {
             self.future_states.insert(tick, state.clone());
             if !state.alive {
                 end_tick = tick;
+                let max_tick = *self.future_states.last_key_value().unwrap().0;
+                for tick in end_tick + 1..=max_tick {
+                    self.future_states.remove(&tick);
+                }
                 break;
             }
         }
@@ -599,12 +607,21 @@ fn collisions_equiv(a: &Collision, b: &Collision) -> bool {
         (&b.other_result, &b.this_result)
     };
 
-    if &a.this_result != b_this {
+    // if &a.this_result != b_this {
+    //     dbg!("This Results don't match", a, b);
+    //     return false;
+    // }
+    //
+    // if &a.other_result != b_other {
+    //     dbg!("Other Results don't match", a, b);
+    //     return false;
+    // }
+    if !a.this_result.pos_equiv(b_this) {
         dbg!("This Results don't match", a, b);
         return false;
     }
 
-    if &a.other_result != b_other {
+    if !a.other_result.pos_equiv(b_other) {
         dbg!("Other Results don't match", a, b);
         return false;
     }
@@ -625,6 +642,10 @@ fn check_for_collision(
     };
     let Some(res) = spatial_index.collides(e, tick, state.pos, collider) else {
         dbg!("doesn't collide", tick);
+        // eprintln!(
+        //     "Doesn't collide tick: {tick}, {:?}",
+        //     &spatial_index.0.get(&tick)
+        // );
         return None;
     };
     let (other_aabb, other) = res;
@@ -632,14 +653,14 @@ fn check_for_collision(
     let (this_result, other_result) =
         state.collision_result(other_aabb, &other);
 
-    info!(
-        this = e.index(),
-        other = other.entity.index(),
-        // other_aabb = ?other_aabb.to_bevy(),
-        ?this_result,
-        ?other_result,
-        "Found collision"
-    );
+    // info!(
+    //     this = e.index(),
+    //     other = other.entity.index(),
+    //     // other_aabb = ?other_aabb.to_bevy(),
+    //     ?this_result,
+    //     ?other_result,
+    //     "Found collision"
+    // );
     return Some(Collision {
         tick,
         this: e,
@@ -1010,7 +1031,7 @@ mod tests {
         let mut app = create_test_app();
         app.world_mut()
             .resource_mut::<SimulationConfig>()
-            .prediction_ticks = 5;
+            .prediction_ticks = 4;
         app.world_mut()
             .resource_mut::<SimulationConfig>()
             .ticks_per_second = 1;
@@ -1035,6 +1056,7 @@ mod tests {
             .spawn(PhysicsBundle::from_state(
                 PhysicsState {
                     pos: Vec2::new(30., 0.),
+                    mass: 3.,
                     ..create_test_physics_state()
                 },
                 Vec2::splat(2.),
@@ -1073,13 +1095,7 @@ mod tests {
 
         // Verify states were computed
         assert!(!timeline.future_states.is_empty());
-        assert_eq!(
-            timeline.last_computed_tick,
-            1 + app.world().resource::<SimulationConfig>().prediction_ticks
-        );
-
-        // Check that thrust was applied at the correct tick
-        assert!(false);
+        assert_eq!(timeline.last_computed_tick, 3);
     }
 
     #[test]

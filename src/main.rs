@@ -33,8 +33,9 @@ fn main() {
         .add_plugins((
             PhysicsSimulationPlugin {
                 config: SimulationConfig {
-                    ticks_per_second: 10,
-                    time_dilation: 0.1,
+                    ticks_per_second: 60,
+                    time_dilation: 1.,
+                    prediction_ticks: 1200,
                     ..default()
                 },
                 schedule: FixedUpdate,
@@ -98,10 +99,14 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     //     Vec2::new(-10., -10.),
     //     &asset_server,
     // ));
+    // commands.queue(SmallAsteroid::spawn(
+    //     Vec2::new(150., 20.),
+    //     Vec2::new(1., -2.),
+    // ));
 
     commands.queue(SmallAsteroid::spawn(
-        Vec2::new(40., 20.),
-        Vec2::new(1., -2.),
+        Vec2::new(150., 50.),
+        Vec2::new(100., -2.),
     ));
 }
 
@@ -493,6 +498,7 @@ fn handle_engine_input(
         let Some(preview) = preview.as_mut() else {
             continue;
         };
+        let craft_entity = seg.craft_entity;
 
         let world_drag = screen_to_world(drag.distance);
         let (collider, _) = timelines.get(seg.craft_entity).unwrap();
@@ -511,7 +517,7 @@ fn handle_engine_input(
         let mut new_collisions = EntityHashMap::default();
         // FIXME: Does this even make sense?
         preview.timeline.lookahead(
-            drag.target,
+            craft_entity,
             simulation_config.current_tick,
             1.0 / simulation_config.ticks_per_second as f32,
             simulation_config.prediction_ticks,
@@ -520,9 +526,13 @@ fn handle_engine_input(
             &mut new_collisions,
             &mut invalidations,
         );
+        if new_collisions.len() > 0 {
+            info!("New collisions non-zero during preview");
+        }
         if invalidations.len() > 0 {
             info!("Collision invalidations non-zero during preview");
         }
+        info!("drag loop over");
     }
 
     for drag_end in drag_end_r.read() {

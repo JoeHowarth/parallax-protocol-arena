@@ -8,6 +8,12 @@ use crate::prelude::*;
 #[derive(Component, Debug, Clone, Deref, Copy)]
 pub struct Collider(pub BRect);
 
+impl Collider {
+    pub fn from_dim(dim: Vec2) -> Self {
+        Self(BRect::from_corners(-dim / 2., dim / 2.))
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Collision {
     pub tick: u64,
@@ -21,6 +27,21 @@ pub struct Collision {
 pub enum EntityCollisionResult {
     Destroyed,
     Survives { post_pos: Vec2, post_vel: Vec2 },
+}
+
+impl EntityCollisionResult {
+    pub fn pos_equiv(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Survives { post_pos, .. },
+                Self::Survives {
+                    post_pos: other_pos,
+                    ..
+                },
+            ) => post_pos == other_pos,
+            (a, b) => a == b,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -56,6 +77,29 @@ impl SpatialIndexPerTick {
         };
         self.rtree.remove(rect, entity);
     }
+
+    pub fn collides(
+        &self,
+        entity: Entity,
+        pos: Vec2,
+        collider: &Collider,
+    ) -> Option<(RRect, SpatialItem)> {
+        // info!("Checking collisions...");
+        let rect = collider.transalate(pos).to_rtree();
+        self.rtree
+            .search(rect)
+            .filter(|e| e.data != &entity)
+            .next()
+            .and_then(|e| self.e_map.get(e.data).cloned())
+    }
+
+    pub fn insert(&mut self, collider: &Collider, item: SpatialItem) {
+        self.remove(&item.entity);
+
+        let rect = collider.0.transalate(item.pos).to_rtree();
+        self.rtree.insert(rect, item.entity);
+        self.e_map.insert(item.entity, (rect, item));
+    }
 }
 
 impl SpatialIndex {
@@ -66,16 +110,9 @@ impl SpatialIndex {
         pos: Vec2,
         collider: &Collider,
     ) -> Option<(RRect, SpatialItem)> {
-        // info!("Checking collisions...");
-        let rect = collider.transalate(pos).to_rtree();
-        self.0.get(&tick).and_then(|index| {
-            index
-                .rtree
-                .search(rect)
-                .next()
-                .filter(|e| e.data != &entity)
-                .and_then(|e| index.e_map.get(e.data).cloned())
-        })
+        self.0
+            .get(&tick)
+            .and_then(|index| index.collides(entity, pos, collider))
     }
 
     pub fn insert(
@@ -85,12 +122,25 @@ impl SpatialIndex {
         item: SpatialItem,
     ) {
         let index = self.0.entry(tick).or_insert_with(default);
+        index.insert(collider, item);
+    }
+}
 
-        index.remove(&item.entity);
-
-        let rect = collider.0.transalate(item.pos).to_rtree();
-        index.rtree.insert(rect, item.entity);
-        index.e_map.insert(item.entity, (rect, item));
+impl std::fmt::Debug for SpatialIndexPerTick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{")?;
+        for item in self.rtree.iter() {
+            write!(
+                f,
+                "(Rect: [{}, {}], [{}, {}], e: {}), ",
+                item.rect.min[0],
+                item.rect.min[1],
+                item.rect.max[0],
+                item.rect.max[1],
+                item.data.index()
+            )?;
+        }
+        writeln!(f, "}}")
     }
 }
 
@@ -163,6 +213,45 @@ mod tests {
     use bevy::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn test_spatial_index() {
+        let collider = Collider::from_dim(Vec2::splat(2.));
+        let mut spatial_index = SpatialIndexPerTick::default();
+        let e0 = Entity::from_raw(0);
+        let e1 = Entity::from_raw(1);
+        let pos = Vec2::new(30., 0.);
+        spatial_index.insert(
+            &collider,
+            SpatialItem {
+                entity: e0,
+                pos,
+                vel: Vec2::new(0., 0.),
+                mass: 1.,
+            },
+        );
+        spatial_index.insert(
+            &collider,
+            SpatialItem {
+                entity: e1,
+                pos,
+                vel: Vec2::new(0., 0.),
+                mass: 1.,
+            },
+        );
+
+        let res = spatial_index.collides(e0, pos, &collider);
+        assert!(res.is_some());
+        let (rect, item) = res.unwrap();
+        assert_eq!(
+            rect.to_bevy(),
+            BRect {
+                min: Vec2::new(29.0, -1.0,),
+                max: Vec2::new(31.0, 1.0,),
+            }
+        );
+        assert_eq!(item.entity, e1);
+    }
 
     #[test]
     fn test_slow_equal_mass() {
