@@ -1,21 +1,47 @@
-//! Physics simulation module for predictive spacecraft movement
+//! Physics simulation module for predictive spacecraft movement in a 2D space environment
 //!
-//! This module implements a specialized 2D physics system focused on:
-//! - Deterministic simulation for trajectory prediction
-//! - Timeline-based control inputs
-//! - Efficient state computation for visualization
+//! This module implements a specialized physics system that enables both real-time
+//! simulation and future state prediction. The system is designed around these key goals:
 //!
-//! The core components are:
-//! - `PhysicsState`: Current physical properties of an entity
-//! - `Timeline`: Scheduled control inputs and computed future states
-//! - `SimulationState`: Global simulation parameters and time control
+//! - Deterministic simulation for reliable trajectory prediction
+//! - Timeline-based control inputs for planning complex maneuvers
+//! - Efficient state computation and visualization of future paths
+//! - Realistic collision detection and resolution between spacecraft and obstacles
 //!
-//! The simulation works by:
-//! 1. Storing control inputs (thrust, rotation, etc) with their activation
-//!    ticks
-//! 2. Computing future physics states by integrating from the current state
-//! 3. Invalidating and recomputing states when new inputs are added
-//! 4. Synchronizing entity transforms with the current simulation tick
+//! # Core Components
+//!
+//! - `PhysicsState`: Represents the physical properties and state of an entity at a point in time
+//! - `Timeline`: Manages scheduled control inputs and computed future states for an entity
+//! - `SimulationConfig`: Controls global simulation parameters and time flow
+//!
+//! # How It Works
+//!
+//! 1. Control inputs (thrust, rotation changes, etc.) are scheduled at specific simulation ticks
+//! 2. The system computes future states by integrating physics from the current state
+//! 3. When new inputs are added, affected future states are invalidated and recomputed
+//! 4. Entity transforms are synchronized with the current simulation tick
+//!
+//! # Coordinate System
+//!
+//! - Origin (0,0) is at the center of the world
+//! - +X extends right, +Y extends up
+//! - Rotations are in radians, clockwise from the +X axis
+//! - Distances are in meters
+//! - Time is measured in simulation ticks (default: 60 ticks/second)
+//!
+//! # Physics Model
+//!
+//! The simulation uses a simplified 2D physics model with these properties:
+//! - No gravity or orbital mechanics
+//! - Constant mass (no fuel consumption)
+//! - Instant thrust response
+//! - Perfect rigid body collisions
+//! 
+//! # Limitations
+//!
+//! - No continuous collision detection (may miss collisions at high velocities)
+//! - Limited accuracy from simple Euler integration
+//! - No support for non-rigid body deformation
 
 use std::{
     ops::{RangeBounds, RangeInclusive},
@@ -89,7 +115,26 @@ impl PhysicsBundle {
     }
 }
 
-/// Physical properties and control state of a simulated entity
+/// Represents the complete physical state of a simulated entity at a point in time
+///
+/// This struct contains all the physical properties needed to simulate an entity's
+/// movement and interactions. It tracks both linear and angular motion, as well as
+/// thrust capabilities.
+///
+/// # Properties
+///
+/// * `pos` - Position in world space (meters)
+/// * `vel` - Velocity vector (meters/second) 
+/// * `rotation` - Orientation in radians (0 = facing +X)
+/// * `ang_vel` - Angular velocity (radians/second)
+/// * `mass` - Mass of entity in kilograms
+/// * `current_thrust` - Current thrust level (-1.0 to 1.0)
+/// * `max_thrust` - Maximum thrust force in Newtons
+/// * `alive` - Whether entity still exists (false = destroyed)
+///
+/// # Requirements
+///
+/// Entities with PhysicsState must also have Transform and Timeline components
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 #[require(Transform, Timeline)]
 pub struct PhysicsState {
@@ -98,11 +143,9 @@ pub struct PhysicsState {
     pub rotation: f32,
     pub ang_vel: f32,
     pub mass: f32,
-    // start with this for basic thrust, but can move them out later
-    pub current_thrust: f32, // -1.0 to 1.0
-    pub max_thrust: f32,     // newtons
-    // TODO: come up with a better way to model destruction
-    pub alive: bool,
+    pub current_thrust: f32, // Normalized thrust (-1.0 to 1.0)
+    pub max_thrust: f32,     // Maximum thrust force in Newtons
+    pub alive: bool,         // Entity destruction state
 }
 
 #[derive(Event, Debug)]
@@ -115,15 +158,23 @@ pub struct TimelineEventRequest {
     pub input: ControlInput,
 }
 
-/// Control inputs that can be scheduled to modify entity behavior
+/// Control inputs that can be scheduled to modify entity behavior at specific ticks
+///
+/// These inputs represent discrete changes to an entity's movement parameters.
+/// They can be scheduled in advance to create complex movement patterns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ControlInput {
-    /// Set thrust level between -1.0 and 1.0
+    /// Set thrust level between -1.0 (full reverse) and 1.0 (full forward)
     SetThrust(f32),
-    /// Set absolute rotation in radians
+    
+    /// Set absolute rotation in radians (0 = facing +X axis)
     SetRotation(f32),
-    /// Set angular velocity in radians/second
+    
+    /// Set angular velocity in radians/second (positive = clockwise)
     SetAngVel(f32),
+    
+    /// Simultaneously set thrust (-1.0 to 1.0) and rotation (radians)
+    /// Useful for immediate course corrections
     SetThrustAndRotation(f32, f32),
 }
 
