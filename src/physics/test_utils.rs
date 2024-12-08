@@ -29,8 +29,14 @@ impl TestStateBuilder {
     pub fn new() -> Self {
         Self {
             state: PhysicsState {
+                pos: Vec2::ZERO,
+                vel: Vec2::ZERO,
+                rotation: 0.0,
+                ang_vel: 0.0,
+                mass: 1.0,
+                current_thrust: 0.0,
+                max_thrust: 100.0,
                 alive: true,
-                ..default()
             },
         }
     }

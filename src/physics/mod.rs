@@ -729,7 +729,7 @@ mod tests {
     use assert_approx_eq::assert_approx_eq;
     use bevy::{app::App, time::Time};
 
-    use super::*;
+    use super::{test_utils::*, *};
 
     fn create_test_app() -> App {
         let mut app = App::new();
@@ -761,11 +761,9 @@ mod tests {
         let mut spatial_index = SpatialIndex::default();
         let col = Collider::from_dim(Vec2::new(2., 2.));
 
-        // Set up b
+        // Set up b - simplified with builder
         let b = Entity::from_raw(1);
-        let mut b_st = create_test_physics_state();
-        b_st.pos.x = 20.;
-        b_st.mass = 1.;
+        let b_st = TestStateBuilder::new().pos(20., 0.).mass(1.).build();
         let mut b_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
             events: BTreeMap::default(),
@@ -780,11 +778,9 @@ mod tests {
         assert_eq!(b_tl.events.len(), 0);
         spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
 
-        // Set up a
+        // Set up a - simplified with builder
         let a = Entity::from_raw(0);
-        let mut a_st = create_test_physics_state();
-        a_st.vel.x = 10.;
-        a_st.mass = 9.;
+        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
         let mut a_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
             events: BTreeMap::default(),
@@ -888,11 +884,9 @@ mod tests {
         let mut spatial_index = SpatialIndex::default();
         let col = Collider::from_dim(Vec2::new(2., 2.));
 
-        // Set up b
+        // Set up b - simplified with builder
         let b = Entity::from_raw(1);
-        let mut b_st = create_test_physics_state();
-        b_st.pos.x = 10.;
-        b_st.mass = 1.;
+        let b_st = TestStateBuilder::new().pos(10., 0.).mass(1.).build();
         let mut b_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
             events: BTreeMap::default(),
@@ -908,11 +902,9 @@ mod tests {
         assert_eq!(b_tl.events.len(), 0);
         spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
 
-        // Set up a
+        // Set up a - simplified with builder
         let a = Entity::from_raw(0);
-        let mut a_st = create_test_physics_state();
-        a_st.vel.x = 10.;
-        a_st.mass = 9.;
+        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
         let mut a_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
             events: BTreeMap::default(),
@@ -979,9 +971,7 @@ mod tests {
         spatial_index.insert(tick, &col, b_spatial_item.clone());
 
         let a = Entity::from_raw(0);
-        let mut a_st = create_test_physics_state();
-        a_st.vel.x = 10.;
-        a_st.mass = 9.;
+        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
 
         let mut a_tl = Timeline {
             future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
@@ -1132,152 +1122,6 @@ mod tests {
             1e-6
         );
     }
-
-    // #[test]
-    // fn test_lookahead_collision_survives() {
-    // let mut prev_state = create_test_physics_state();
-    // prev_state.vel.x = 10.;
-    // prev_state.mass = 9.;
-    //
-    // let mut timeline = Timeline {
-    // future_states: BTreeMap::from_iter(
-    // [(0, prev_state.clone())].into_iter(),
-    // ),
-    // events: BTreeMap::default(),
-    // last_computed_tick: 0,
-    // };
-    // let entity = Entity::from_raw(5);
-    // let current_tick = 1;
-    // let seconds_per_tick = 1.;
-    // let dim = Vec2::new(2., 2.);
-    // let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
-    // let mut spatial_index = SpatialIndex::default();
-    // let other_entity = Entity::from_raw(1009001);
-    // spatial_index.insert(
-    // 2,
-    // &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
-    // SpatialItem {
-    // entity: other_entity,
-    // pos: Vec2::new(20., 0.),
-    // vel: Vec2::new(0., 0.),
-    // mass: 1.,
-    // },
-    // );
-    //
-    // let ret = timeline.lookahead(
-    // entity,
-    // current_tick,
-    // seconds_per_tick,
-    // 10,
-    // collider.as_ref(),
-    // &spatial_index,
-    // );
-    //
-    // dbg!(&ret);
-    // dbg!(&timeline.events);
-    //
-    // let next_state = timeline.future_states.get(&(current_tick)).unwrap();
-    // let expected = PhysicsState {
-    // pos: Vec2::new(10., 0.),
-    // ..prev_state
-    // };
-    // assert_eq!(next_state, &expected);
-    //
-    // let others_collision = new_collisions.get(&other_entity).unwrap();
-    // assert_eq!(
-    // others_collision,
-    // &Collision {
-    // tick: 2,
-    // this: entity,
-    // this_result: EntityCollisionResult::Survives {
-    // post_pos: Vec2::new(20., 0.),
-    // post_vel: Vec2::new(9., 0.),
-    // },
-    // other: other_entity,
-    // other_result: EntityCollisionResult::Destroyed
-    // }
-    // );
-    //
-    // let expected = PhysicsState {
-    // pos: Vec2::new(29., 0.),
-    // vel: Vec2::new(9., 0.),
-    // ..prev_state
-    // };
-    // assert_eq!(timeline.future_states.get(&3), Some(&expected));
-    // assert_eq!(timeline.future_states.get(&2).unwrap().alive, true);
-    // }
-    //
-    // #[test]
-    // fn test_lookahead_collision_destroyed() {
-    // let mut prev_state = create_test_physics_state();
-    // prev_state.vel.x = 10.;
-    //
-    // let mut timeline = Timeline {
-    // future_states: BTreeMap::from_iter(
-    // [(0, prev_state.clone())].into_iter(),
-    // ),
-    // events: BTreeMap::default(),
-    // last_computed_tick: 0,
-    // };
-    // let entity = Entity::from_raw(5);
-    // let current_tick = 1;
-    // let seconds_per_tick = 1.;
-    // let dim = Vec2::new(2., 2.);
-    // let collider = Some(Collider(BRect::from_corners(dim / 2., -dim / 2.)));
-    // let mut spatial_index = SpatialIndex::default();
-    // let other_entity = Entity::from_raw(1009001);
-    // spatial_index.insert(
-    // 2,
-    // &Collider(BRect::from_corners(dim / 2., -dim / 2.)),
-    // SpatialItem {
-    // entity: other_entity,
-    // pos: Vec2::new(20., 0.),
-    // vel: Vec2::new(0., 0.),
-    // mass: 2.,
-    // },
-    // );
-    // let mut new_collisions = EntityHashMap::default();
-    // let mut invalidations = EntityHashMap::default();
-    //
-    // timeline.lookahead(
-    // entity,
-    // current_tick,
-    // seconds_per_tick,
-    // 10,
-    // collider.as_ref(),
-    // &spatial_index,
-    // &mut new_collisions,
-    // &mut invalidations,
-    // );
-    //
-    // dbg!(&new_collisions);
-    // dbg!(&timeline.events);
-    //
-    // let next_state = timeline.future_states.get(&(current_tick)).unwrap();
-    // let expected = PhysicsState {
-    // pos: Vec2::new(10., 0.),
-    // ..prev_state
-    // };
-    // assert_eq!(next_state, &expected);
-    //
-    // let others_collision = new_collisions.get(&other_entity).unwrap();
-    // assert_eq!(
-    // others_collision,
-    // &Collision {
-    // tick: 2,
-    // this: entity,
-    // this_result: EntityCollisionResult::Destroyed,
-    // other: other_entity,
-    // other_result: EntityCollisionResult::Survives {
-    // post_pos: Vec2::new(20., 0.),
-    // post_vel: Vec2::new(10. / 3., 0.),
-    // }
-    // }
-    // );
-    //
-    // assert_eq!(timeline.future_states.get(&3), None);
-    // assert_eq!(timeline.future_states.get(&2).unwrap().alive, false);
-    // }
 
     #[test]
     fn test_lookahead() {
