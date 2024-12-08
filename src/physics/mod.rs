@@ -54,7 +54,7 @@ impl PhysicsBundle {
     pub fn new_with_events(
         state: PhysicsState,
         dim: Vec2,
-        events: impl Iterator<Item = (u64, TimelineEvent)>,
+        events: impl IntoIterator<Item = (u64, TimelineEvent)>,
     ) -> PhysicsBundle {
         let mut bundle = PhysicsBundle::from_state(state, dim);
         bundle.timeline.events.extend(events);
@@ -324,38 +324,12 @@ impl PhysicsState {
         }
     }
 
-    fn apply_collision_event(
-        &mut self,
-        e: Entity,
-        event: Option<&TimelineEvent>,
-    ) {
-        use TimelineEvent::{Collision, Control};
-        let Some(event) = event else {
-            return;
-        };
-        match event {
-            Control(control_event) => {}
-            Collision(collision) => {
-                self.apply_collision(e, collision);
-            }
-        }
-    }
-
-    fn apply_collision(&mut self, e: Entity, collision: &Collision) {
-        let result = if dbg!(e == collision.this) {
-            dbg!(&collision.this_result)
-        } else {
-            dbg!(&collision.other_result)
-        };
+    fn apply_collision_result(&mut self, result: &EntityCollisionResult) {
         match result {
-            collisions::EntityCollisionResult::Destroyed => {
-                // TODO: clean this up
+            EntityCollisionResult::Destroyed => {
                 self.alive = false;
             }
-            collisions::EntityCollisionResult::Survives {
-                post_pos,
-                post_vel,
-            } => {
+            EntityCollisionResult::Survives { post_pos, post_vel } => {
                 self.pos = *post_pos;
                 self.vel = *post_vel;
             }
@@ -398,7 +372,7 @@ impl PhysicsState {
 fn compute_future_states(
     simulation_config: Res<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
-    mut query: Query<(Entity, Option<&Collider>, &PhysicsState, &mut Timeline)>,
+    mut query: Query<(Entity, &Collider, &PhysicsState, &mut Timeline)>,
 ) {
     let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
 
@@ -426,15 +400,13 @@ fn compute_future_states(
             );
 
             // Patch spatial index
-            if let Some(collider) = collider {
-                spatial_index.patch(
-                    e,
-                    &timeline,
-                    collider,
-                    ret.updated,
-                    ret.removed,
-                );
-            }
+            spatial_index.patch(
+                e,
+                &timeline,
+                collider,
+                ret.updated,
+                ret.removed,
+            );
 
             interaction = ret.interaction;
             if interaction.is_some() {
@@ -450,9 +422,9 @@ fn compute_future_states(
 
         let [ (a_e, a_col, _, mut a_tl), // fmt
           (b_e, b_col, _, mut b_tl) // fmt
-        ] = query.get_many_mut(interaction.0.0).unwrap();
+        ] = query.get_many_mut(interaction.entities).unwrap();
         resolve_collisions(
-            interaction.0 .1,
+            interaction.tick,
             (a_e, a_col, &mut a_tl),
             (b_e, b_col, &mut b_tl),
             seconds_per_tick,
@@ -467,8 +439,8 @@ fn compute_future_states(
 
 fn resolve_collisions(
     tick: u64,
-    (a_e, a_col, a_tl): (Entity, Option<&Collider>, &mut Timeline),
-    (b_e, b_col, b_tl): (Entity, Option<&Collider>, &mut Timeline),
+    (a_e, a_col, a_tl): (Entity, &Collider, &mut Timeline),
+    (b_e, b_col, b_tl): (Entity, &Collider, &mut Timeline),
     seconds_per_tick: f32,
     spatial_index: &mut SpatialIndex,
 ) {
@@ -481,13 +453,10 @@ fn resolve_collisions(
 
     let b_ret =
         b_tl.lookahead(b_e, tick, seconds_per_tick, 0, b_col, &spatial_index);
-    // TODO: Make collider non-optional
-    let a_col = a_col.expect("Must have colider to be part of interaction");
-    let b_col = b_col.expect("Must have colider to be part of interaction");
 
     assert_eq!(*b_ret.updated.end(), tick);
 
-    // patch b's spatial index
+    // Patch b's spatial index
     spatial_index.patch(b_e, &b_tl, b_col, b_ret.updated, b_ret.removed);
 
     // NOTE:both must have computed state at tick, but not applied any
@@ -496,12 +465,24 @@ fn resolve_collisions(
     let b_st = b_tl.future_states.get_mut(&tick).unwrap();
 
     // STEP 2: check for interaction
-    if let Some(collision) =
-        check_for_collision(a_e, tick, a_st, Some(a_col), &spatial_index)
+    if let Some(collision) = spatial_index.collides(a_e, tick, a_st.pos, a_col)
     {
         // STEP 3: resolve interaction
-        a_st.apply_collision(a_e, &collision);
-        b_st.apply_collision(b_e, &collision);
+        let (a_result, b_result) =
+            a_st.collision_result(collision.0, &collision.1);
+
+        a_st.apply_collision_result(&a_result);
+        b_st.apply_collision_result(&b_result);
+
+        // TODO: rethink why we're storing this
+        let collision = Collision {
+            tick,
+            this: a_e,
+            this_result: a_result,
+            other: b_e,
+            other_result: b_result,
+        };
+
         a_tl.events
             .insert(tick, TimelineEvent::Collision(collision.clone()));
         b_tl.events
@@ -522,7 +503,19 @@ pub struct LookaheadRet {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct InteractionLocator(([Entity; 2], u64));
+pub struct InteractionLocator {
+    pub entities: [Entity; 2],
+    pub tick: u64,
+}
+
+impl From<(Entity, Entity, u64)> for InteractionLocator {
+    fn from(value: (Entity, Entity, u64)) -> Self {
+        InteractionLocator {
+            entities: [value.0, value.1],
+            tick: value.2,
+        }
+    }
+}
 
 impl Timeline {
     pub fn lookahead(
@@ -531,7 +524,7 @@ impl Timeline {
         current_tick: u64,
         seconds_per_tick: f32,
         prediction_ticks: u64,
-        collider: Option<&Collider>,
+        collider: &Collider,
         spatial_index: &SpatialIndex,
     ) -> LookaheadRet {
         // Start computation from the earliest invalid state
@@ -565,7 +558,7 @@ impl Timeline {
                     "Timeline encountered and interaction event. Ejecting for \
                      resolution. {tick}, {c:?}, {state:?}"
                 );
-                interaction = Some(InteractionLocator(([e, c.other], tick)));
+                interaction = Some((e, c.other, tick).into());
                 end_tick = tick;
                 break;
             }
@@ -578,12 +571,11 @@ impl Timeline {
             }
 
             // Check if we collide
-            if let Some(collision) =
-                check_for_collision(e, tick, &state, collider, spatial_index)
+            if let Some((_, other)) =
+                spatial_index.collides(e, tick, state.pos, collider)
             {
                 eprintln!("found new collision, {tick}");
-                interaction =
-                    Some(InteractionLocator(([e, collision.other], tick)));
+                interaction = Some((e, other.entity, tick).into());
                 end_tick = tick;
                 break;
             }
@@ -610,90 +602,6 @@ impl Timeline {
             interaction,
         }
     }
-}
-
-fn collisions_equiv(a: &Collision, b: &Collision) -> bool {
-    if (a.this != b.this && a.this != b.other)
-        || (a.other != b.other && a.other != b.this)
-    {
-        dbg!("Not same entities for collision", a, b);
-        return false;
-    }
-
-    if a.tick != b.tick {
-        dbg!("ticks don't match", a, b);
-        return false;
-    }
-
-    let (b_this, b_other) = if a.this == b.this {
-        // Proceed with normal comparison
-        (&b.this_result, &b.other_result)
-    } else {
-        // Switch other and this
-        (&b.other_result, &b.this_result)
-    };
-
-    // if &a.this_result != b_this {
-    //     dbg!("This Results don't match", a, b);
-    //     return false;
-    // }
-    //
-    // if &a.other_result != b_other {
-    //     dbg!("Other Results don't match", a, b);
-    //     return false;
-    // }
-    if !a.this_result.pos_equiv(b_this) {
-        dbg!("This Results don't match", a, b);
-        return false;
-    }
-
-    if !a.other_result.pos_equiv(b_other) {
-        dbg!("Other Results don't match", a, b);
-        return false;
-    }
-
-    true
-}
-
-fn check_for_collision(
-    e: Entity,
-    tick: u64,
-    state: &PhysicsState,
-    collider: Option<&Collider>,
-    spatial_index: &SpatialIndex,
-) -> Option<Collision> {
-    let Some(collider) = collider else {
-        dbg!("No collider");
-        return None;
-    };
-    let Some(res) = spatial_index.collides(e, tick, state.pos, collider) else {
-        dbg!("doesn't collide", tick);
-        // eprintln!(
-        //     "Doesn't collide tick: {tick}, {:?}",
-        //     &spatial_index.0.get(&tick)
-        // );
-        return None;
-    };
-    let (other_aabb, other) = res;
-
-    let (this_result, other_result) =
-        state.collision_result(other_aabb, &other);
-
-    // info!(
-    //     this = e.index(),
-    //     other = other.entity.index(),
-    //     // other_aabb = ?other_aabb.to_bevy(),
-    //     ?this_result,
-    //     ?other_result,
-    //     "Found collision"
-    // );
-    return Some(Collision {
-        tick,
-        this: e,
-        this_result,
-        other: other.entity,
-        other_result,
-    });
 }
 
 /// Update tranform and physics state from timeline
@@ -790,7 +698,7 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let b_ret = b_tl.lookahead(b, 1, 1., 1, Some(&col), &spatial_index);
+        let b_ret = b_tl.lookahead(b, 1, 1., 1, &col, &spatial_index);
         dbg!(&b_ret);
         assert_eq!(b_ret.updated, 1..=2);
         assert_eq!(b_ret.interaction, None);
@@ -809,10 +717,10 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let a_ret = a_tl.lookahead(a, 1, 1., 1, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 1, &col, &spatial_index);
         dbg!(&a_ret);
         assert_eq!(a_ret.updated, 1..=2);
-        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], tick))));
+        assert_eq!(a_ret.interaction, Some((a, b, tick).into()));
         let a_st_t = a_tl.future_states.get(&tick).unwrap();
         assert_eq!(
             a_st_t,
@@ -828,8 +736,8 @@ mod tests {
         // is reduced
         resolve_collisions(
             tick,
-            (a, Some(&col), &mut a_tl),
-            (b, Some(&col), &mut b_tl),
+            (a, &col, &mut a_tl),
+            (b, &col, &mut b_tl),
             1.,
             &mut spatial_index,
         );
@@ -866,10 +774,10 @@ mod tests {
 
         // Re-run lookahead
         // We expect it to find the old, invalid collision event and eject
-        let a_ret = a_tl.lookahead(a, 1, 1., 1, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 1, &col, &spatial_index);
         dbg!(&a_ret);
         assert_eq!(a_ret.updated, 1..=tick);
-        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], tick))));
+        assert_eq!(a_ret.interaction, Some((a, b, tick).into()));
         let a_st_t = a_tl.future_states.get(&tick).unwrap();
         assert_eq!(a_st_t.pos.x, 10.);
         assert_eq!(a_st_t.vel.x, -10.);
@@ -881,8 +789,8 @@ mod tests {
         // a and b should have the collision events removed
         resolve_collisions(
             tick,
-            (a, Some(&col), &mut a_tl),
-            (b, Some(&col), &mut b_tl),
+            (a, &col, &mut a_tl),
+            (b, &col, &mut b_tl),
             1.,
             &mut spatial_index,
         );
@@ -918,7 +826,7 @@ mod tests {
             last_computed_tick: 0,
         };
         // spatial_index.insert(tick, &col, SpatialItem::from_state(b, &b_st));
-        let b_ret = b_tl.lookahead(b, 1, 1., 0, Some(&col), &spatial_index);
+        let b_ret = b_tl.lookahead(b, 1, 1., 0, &col, &spatial_index);
         dbg!(&b_ret);
         assert_eq!(b_ret.updated, 1..=1);
         assert_eq!(b_ret.interaction, None);
@@ -937,10 +845,10 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
         dbg!(&a_ret);
         assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+        assert_eq!(a_ret.interaction, Some((a, b, 1).into()));
         let a_st_t = a_tl.future_states.get(&tick).unwrap();
         assert_eq!(
             a_st_t,
@@ -954,8 +862,8 @@ mod tests {
 
         resolve_collisions(
             tick,
-            (a, Some(&col), &mut a_tl),
-            (b, Some(&col), &mut b_tl),
+            (a, &col, &mut a_tl),
+            (b, &col, &mut b_tl),
             1.,
             &mut spatial_index,
         );
@@ -1007,11 +915,11 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
 
         dbg!(&a_ret);
         assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, Some(InteractionLocator(([a, b], 1))));
+        assert_eq!(a_ret.interaction, Some((a, b, 1).into()));
 
         let a_st_t = a_tl.future_states.get(&tick).unwrap();
         assert_eq!(
@@ -1047,7 +955,7 @@ mod tests {
             events: BTreeMap::default(),
             last_computed_tick: 0,
         };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, Some(&col), &spatial_index);
+        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
 
         dbg!(&a_ret);
         assert_eq!(a_ret.updated, 1..=1);
@@ -1313,7 +1221,7 @@ mod tests {
         let entity = Entity::from_raw(5);
         let current_tick = 1;
         let seconds_per_tick = 1.;
-        let collider = None;
+        let collider = Collider::from_wh(2., 2.);
         let spatial_index = SpatialIndex::default();
 
         let ret = timeline.lookahead(
@@ -1321,7 +1229,7 @@ mod tests {
             current_tick,
             seconds_per_tick,
             120,
-            collider,
+            &collider,
             &spatial_index,
         );
 
@@ -1502,7 +1410,14 @@ mod tests {
         bevy::log::tracing_subscriber::fmt::init();
 
         // Set up entity with multiple control inputs
-        let entity = app.world_mut().spawn(create_test_physics_state()).id();
+        let entity = app
+            .world_mut()
+            .spawn(PhysicsBundle::from_state(
+                create_test_physics_state(),
+                Vec2::splat(2.),
+            ))
+            .id();
+
         app.world_mut().send_event(TimelineEventRequest {
             entity,
             tick: 10,
@@ -1543,35 +1458,20 @@ mod tests {
 
         // Set up entity with multiple control inputs
         let state = create_test_physics_state();
-        let mut future_states = BTreeMap::new();
-        future_states.insert(1, state.clone());
         let entity = app
             .world_mut()
-            .spawn((
+            .spawn(PhysicsBundle::new_with_events(
                 state,
-                Timeline {
-                    events: BTreeMap::from_iter(
-                        [
-                            (
-                                10,
-                                TimelineEvent::Control(
-                                    ControlInput::SetThrust(1.0),
-                                ),
-                            ),
-                            (
-                                20,
-                                TimelineEvent::Control(
-                                    ControlInput::SetRotation(
-                                        std::f32::consts::FRAC_PI_2,
-                                    ),
-                                ),
-                            ),
-                        ]
-                        .into_iter(),
+                Vec2::splat(2.),
+                [
+                    (10, TimelineEvent::Control(ControlInput::SetThrust(1.0))),
+                    (
+                        20,
+                        TimelineEvent::Control(ControlInput::SetRotation(
+                            std::f32::consts::FRAC_PI_2,
+                        )),
                     ),
-                    future_states,
-                    last_computed_tick: 1,
-                },
+                ],
             ))
             .id();
 

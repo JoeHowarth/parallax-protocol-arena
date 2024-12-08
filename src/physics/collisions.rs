@@ -14,6 +14,10 @@ impl Collider {
     pub fn from_dim(dim: Vec2) -> Self {
         Self(BRect::from_corners(-dim / 2., dim / 2.))
     }
+
+    pub fn from_wh(w: f32, h: f32) -> Self {
+        Self::from_dim(Vec2::new(w, h))
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]

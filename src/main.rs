@@ -463,7 +463,7 @@ fn handle_engine_input(
     mut drag_end_r: EventReader<Pointer<DragEnd>>,
     mut drag_r: EventReader<Pointer<Drag>>,
     segments: Query<&TrajectorySegment>,
-    timelines: Query<(Option<&Collider>, &Timeline)>,
+    timelines: Query<(&Collider, &Timeline)>,
     mut preview: Option<ResMut<TrajectoryPreview>>,
     mut timeline_event_writer: EventWriter<TimelineEventRequest>,
     mut commands: Commands,
