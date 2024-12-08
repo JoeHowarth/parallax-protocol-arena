@@ -1,10 +1,11 @@
 # Parallax Paradox: Arena
 
-Arena is the first milestone in the Parallax Protocol project, featuring intense space combat driven by skill, creativity, and tactical planning. It serves as both a standalone competitive game and a foundation for the broader vision of Parallax Protocol.
+Arena is the first milestone in the Parallax Protocol project, featuring intense 2-player space combat where skill, creativity, and tactical planning determine victory. It serves as both a compelling competitive game and a foundation for our broader vision: commanding vast networks of ships and resources across the solar system under realistic light-speed communication constraints.
 
 ## The Vision
-
-In Arena, two commanders engage in high-speed tactical space combat where superior skill and inventive strategies determine victory. While the full Parallax Protocol will explore strategic command across the solar system under realistic light-speed constraints, Arena zooms in on the tactical core of ship-to-ship combat in a confined region of space.
+Arena strips space combat down to its competitive essence. 
+No tech trees, no grind - just two commanders in a dance of position and momentum. 
+Arena rewards creative tactical thinking and mechanical mastery, creating matches where every movement matters and victory comes from outwitting, not outgunning, your opponent.
 
 ## Core Mechanics
 
@@ -65,6 +66,6 @@ By focusing first on Arena's tactical excellence, we ensure these strategic elem
 
 The project is currenly working towards a technical demo of arena with minimal graphics. This is the second demo after validating the integration of hot-reloaded lua scripting for agent behaviors. Expect arena to focus on rust foundamentals first.
 
-If you have ideas or questions the team would love to hear your thoughts! Issues are the best place for now, though we'll get a discord going once there is a playable mvp.
+If you have ideas or questions the team would love to hear your thoughts! Issues are the best place for now, though we'll get a discord going once we're ready to share an alpha.
 
 Later in the development process we're looking for artists and graphics engineers, both volunteer and paid contract roles.
