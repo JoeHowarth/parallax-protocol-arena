@@ -27,15 +27,44 @@ Every engagement becomes a dynamic puzzle where movement, timing, and positionin
 
 ## Looking Forward
 
-Arena represents the tactical foundation of Parallax Protocol. Future iterations will expand beyond the confined arena to encompass:
-- Strategic command across the solar system
-- Light-speed communication constraints 
-- Economic and resource management
-- Fleet coordination and logistics
-- Semi-autonomous ship operations
+Arena represents the tactical foundation of a much broader vision: 
+commanding a vast network of spacecraft and operations across the entire solar system. 
+While Arena focuses on perfecting close-range combat mechanics, 
+future expansions will introduce revolutionary strategic depth through several key systems:
 
-By focusing first on perfecting a pure skill-based combat experience, Arena ensures that the foundation of Parallax Protocol delivers engaging and sophisticated gameplay that rewards both creative thinking and tactical mastery.
+### Light-Speed Command Delays
+The fundamental constraint of light-speed communication creates a novel strategic layer where 
+command latency becomes a vital consideration. 
+Orders to ships near Jupiter can take up to 52 minutes to arrive, 
+forcing players to carefully consider:
+
+- Command center positioning to minimize critical response times
+- Forward command posts to maintain tactical control in distant regions
+- Information warfare as sensor data and orders propagate at light speed
+
+### Autonomous Operations
+At greater distances, direct control becomes impractical. Players develop a hierarchy of autonomous behaviors:
+
+- Local reactive behaviors for individual ships and stations
+- Regional coordinators managing fleets and resources
+- Strategic commanders overseeing entire zones
+- Players can write hot-reloaded custom behaviors using the same tools as the game's developers, allowing for sophisticated autonomous strategies.
+
+### Strategic Layer
+The interplay of light-speed delays and autonomous operations creates compelling strategic choices:
+
+- Designing robust operations that function across vast distances and delays
+- Balancing centralized control against local autonomy
+- Managing industrial operations and supply lines that span the solar system
+- Building hierarchical command structures to coordinate distant regions
+
+By focusing first on Arena's tactical excellence, we ensure these strategic elements emerge naturally from a foundation of precise, engaging mechanics. Players progress from mastering individual ship combat to orchestrating vast operations - from direct tactical control to strategic command, from manual piloting to programming sophisticated autonomous behaviors. Through this progression, the core theme remains constant: success comes not from statistical advantages, but from superior strategy, careful planning, and elegant solutions to the fundamental challenges of space warfare.
+
 
 ## Development Status
 
-This project is actively under development. Follow along for updates as we work towards our first playable release.
+The project is currenly working towards a technical demo of arena with minimal graphics. This is the second demo after validating the integration of hot-reloaded lua scripting for agent behaviors. Expect arena to focus on rust foundamentals first.
+
+If you have ideas or questions the team would love to hear your thoughts! Issues are the best place for now, though we'll get a discord going once there is a playable mvp.
+
+Later in the development process we're looking for artists and graphics engineers, both volunteer and paid contract roles.
