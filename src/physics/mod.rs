@@ -17,12 +17,16 @@
 //! 3. Invalidating and recomputing states when new inputs are added
 //! 4. Synchronizing entity transforms with the current simulation tick
 
-use std::ops::{RangeBounds, RangeInclusive};
+use std::{
+    ops::{RangeBounds, RangeInclusive},
+    time::Duration,
+};
 
 use bevy::{ecs::schedule::ScheduleLabel, utils::warn};
 use collisions::{
+    calculate_collision_result,
     calculate_impact_energy,
-    calculate_inelastic_collision,
+    viz_colliders,
     Collider,
     Collision,
     EntityCollisionResult,
@@ -194,14 +198,20 @@ impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
                 self.schedule.clone(),
                 (
                     update_simulation_time,
-                    process_timeline_events,
                     compute_future_states,
                     sync_physics_state_transform,
                     despawn_not_alive,
                 )
                     .chain(),
             )
-            .add_systems(Update, (time_dilation_control, viz_colliders));
+            .add_systems(
+                Update,
+                (
+                    time_dilation_control,
+                    viz_colliders,
+                    process_timeline_events,
+                ),
+            );
     }
 }
 
@@ -214,20 +224,6 @@ fn despawn_not_alive(
             info!(?entity, "Despawning dead entity");
             commands.entity(entity).despawn();
         }
-    }
-}
-
-fn viz_colliders(
-    mut gizmos: Gizmos,
-    colliders: Query<(&PhysicsState, &Collider)>,
-) {
-    for (phys, collider) in colliders.iter() {
-        // let world_aabb = collider.0.transalate(phys.pos);
-        gizmos.rect_2d(
-            Isometry2d::new(phys.pos, Rot2::radians(0.)),
-            collider.0.size(),
-            bevy::color::palettes::css::TOMATO,
-        );
     }
 }
 
@@ -335,38 +331,6 @@ impl PhysicsState {
             }
         }
     }
-
-    fn collision_result(
-        &self,
-        other_aabb: RRect,
-        other: &SpatialItem,
-    ) -> (EntityCollisionResult, EntityCollisionResult) {
-        let (q, q_other) = calculate_impact_energy(
-            self.mass,
-            other.mass,
-            other.vel - self.vel,
-        );
-        let post_vel = calculate_inelastic_collision(
-            self.mass, self.vel, other.mass, other.vel,
-        );
-        if q > q_other {
-            (
-                EntityCollisionResult::Destroyed,
-                EntityCollisionResult::Survives {
-                    post_pos: other.pos,
-                    post_vel,
-                },
-            )
-        } else {
-            (
-                EntityCollisionResult::Survives {
-                    post_pos: self.pos,
-                    post_vel,
-                },
-                EntityCollisionResult::Destroyed,
-            )
-        }
-    }
 }
 
 fn compute_future_states(
@@ -420,9 +384,12 @@ fn compute_future_states(
             return;
         };
 
-        let [ (a_e, a_col, _, mut a_tl), // fmt
+        let Ok([ (a_e, a_col, _, mut a_tl), // fmt
           (b_e, b_col, _, mut b_tl) // fmt
-        ] = query.get_many_mut(interaction.entities).unwrap();
+        ]) = query.get_many_mut(interaction.entities) else {
+            dbg!(&interaction);
+            panic!("whoops")
+        };
         resolve_collisions(
             interaction.tick,
             (a_e, a_col, &mut a_tl),
@@ -468,8 +435,10 @@ fn resolve_collisions(
     if let Some(collision) = spatial_index.collides(a_e, tick, a_st.pos, a_col)
     {
         // STEP 3: resolve interaction
-        let (a_result, b_result) =
-            a_st.collision_result(collision.0, &collision.1);
+        let (a_result, b_result) = calculate_collision_result(
+            &SpatialItem::from_state(a_e, a_st),
+            &SpatialItem::from_state(b_e, b_st),
+        );
 
         a_st.apply_collision_result(&a_result);
         b_st.apply_collision_result(&b_result);
@@ -529,7 +498,16 @@ impl Timeline {
     ) -> LookaheadRet {
         // Start computation from the earliest invalid state
         let start_tick = current_tick.max(self.last_computed_tick + 1);
-        let mut end_tick = start_tick.max(current_tick + prediction_ticks);
+        let mut end_tick = current_tick + prediction_ticks;
+        if start_tick > end_tick {
+            info!("start_tick > end_tick, returning early");
+            return LookaheadRet {
+                // will cause `is_empty()` to be true
+                updated: start_tick..=end_tick,
+                removed: None,
+                interaction: None,
+            };
+        }
         eprintln!(
             "start: {start_tick}, end: {end_tick}, current: {current_tick}, \
              last_computed: {}",
@@ -618,7 +596,9 @@ fn sync_physics_state_transform(
 
         transform.translation = Vec3::from2(phys_state.pos);
         transform.rotation = Quat::from_rotation_z(phys_state.rotation);
-        timeline.future_states.remove(&(sim_state.current_tick - 1));
+        timeline
+            .future_states
+            .remove(&(sim_state.current_tick.saturating_sub(2)));
     }
 }
 
@@ -636,6 +616,9 @@ fn time_dilation_control(
     if keys.just_pressed(KeyCode::BracketLeft) {
         config.time_dilation *= 0.5;
         changed = true;
+    }
+    if keys.just_pressed(KeyCode::KeyP) {
+        config.paused = !config.paused;
     }
 
     if changed {

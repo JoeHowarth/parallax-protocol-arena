@@ -20,6 +20,20 @@ impl Collider {
     }
 }
 
+pub fn viz_colliders(
+    mut gizmos: Gizmos,
+    colliders: Query<(&PhysicsState, &Collider)>,
+) {
+    for (phys, collider) in colliders.iter() {
+        // let world_aabb = collider.0.transalate(phys.pos);
+        gizmos.rect_2d(
+            Isometry2d::new(phys.pos, Rot2::radians(0.)),
+            collider.0.size(),
+            bevy::color::palettes::css::TOMATO,
+        );
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Collision {
     pub tick: u64,
@@ -252,7 +266,32 @@ impl CollisionOutcome {
     }
 }
 
-pub fn calculate_inelastic_collision(
+pub fn calculate_collision_result(
+    a: &SpatialItem,
+    b: &SpatialItem,
+) -> (EntityCollisionResult, EntityCollisionResult) {
+    let (q, q_other) = calculate_impact_energy(a.mass, b.mass, b.vel - a.vel);
+    let post_vel = calculate_inelastic_collision(a.mass, a.vel, b.mass, b.vel);
+    if q > q_other {
+        (
+            EntityCollisionResult::Destroyed,
+            EntityCollisionResult::Survives {
+                post_pos: b.pos,
+                post_vel,
+            },
+        )
+    } else {
+        (
+            EntityCollisionResult::Survives {
+                post_pos: a.pos,
+                post_vel,
+            },
+            EntityCollisionResult::Destroyed,
+        )
+    }
+}
+
+fn calculate_inelastic_collision(
     mass_a: f32,
     vel_a: Vec2,
     mass_b: f32,

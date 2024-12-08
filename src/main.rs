@@ -36,8 +36,8 @@ fn main() {
                     let tps = 30;
                     SimulationConfig {
                         ticks_per_second: tps,
-                        time_dilation: 0.1,
-                        prediction_ticks: tps * 2,
+                        time_dilation: 1.0,
+                        prediction_ticks: tps * 10,
                         ..default()
                     }
                 })(),
@@ -45,7 +45,6 @@ fn main() {
             },
             AsteroidPlugin,
         ))
-        // .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, health_despawn)
         .add_systems(
@@ -302,7 +301,7 @@ fn update_event_markers(
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 struct TrajectorySegment {
     craft_entity: Entity,
     start_tick: u64,
@@ -392,6 +391,7 @@ fn update_trajectory(
     let positions = timeline
         .future_states
         .iter()
+        .take_while(|(_, s)| s.alive)
         .map(|(tick, state)| (*tick, state.pos))
         .collect::<Vec<_>>();
 
@@ -471,8 +471,14 @@ fn handle_engine_input(
     spatial_index: Res<SpatialIndex>,
 ) {
     for drag_start in drag_start_r.read() {
-        let seg = segments.get(drag_start.target).unwrap();
-        let (_, timeline) = timelines.get(seg.craft_entity).unwrap();
+        let Ok(seg) = segments.get(drag_start.target) else {
+            warn!("Segment being dragged doesn't exist");
+            continue;
+        };
+        let Ok((_, timeline)) = timelines.get(seg.craft_entity) else {
+            warn!("Timeline for craft being dragged doesn't exist");
+            continue;
+        };
 
         // Create preview timeline starting from segment's end tick
         commands.insert_resource(TrajectoryPreview {
@@ -516,9 +522,6 @@ fn handle_engine_input(
         );
         preview.timeline.last_computed_tick = preview.start_tick - 1;
 
-        // let mut invalidations = EntityHashMap::default();
-        // let mut new_collisions = EntityHashMap::default();
-        // // FIXME: Does this even make sense?
         preview.timeline.lookahead(
             craft_entity,
             simulation_config.current_tick,
@@ -542,6 +545,7 @@ fn handle_engine_input(
             ?world_drag,
             len = world_drag.length(),
             angle = world_drag.to_angle(),
+            ?seg,
             "Drag end"
         );
 
