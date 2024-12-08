@@ -42,6 +42,7 @@ fn main() {
                     }
                 })(),
                 schedule: FixedUpdate,
+                should_keep_alive: false,
             },
             AsteroidPlugin,
         ))

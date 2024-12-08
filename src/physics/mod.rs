@@ -1,24 +1,32 @@
-//! Physics simulation module for predictive spacecraft movement in a 2D space environment
+//! Physics simulation module for predictive spacecraft movement in a 2D space
+//! environment
 //!
-//! This module implements a specialized physics system that enables both real-time
-//! simulation and future state prediction. The system is designed around these key goals:
+//! This module implements a specialized physics system that enables both
+//! real-time simulation and future state prediction. The system is designed
+//! around these key goals:
 //!
 //! - Deterministic simulation for reliable trajectory prediction
 //! - Timeline-based control inputs for planning complex maneuvers
 //! - Efficient state computation and visualization of future paths
-//! - Realistic collision detection and resolution between spacecraft and obstacles
+//! - Realistic collision detection and resolution between spacecraft and
+//!   obstacles
 //!
 //! # Core Components
 //!
-//! - `PhysicsState`: Represents the physical properties and state of an entity at a point in time
-//! - `Timeline`: Manages scheduled control inputs and computed future states for an entity
+//! - `PhysicsState`: Represents the physical properties and state of an entity
+//!   at a point in time
+//! - `Timeline`: Manages scheduled control inputs and computed future states
+//!   for an entity
 //! - `SimulationConfig`: Controls global simulation parameters and time flow
 //!
 //! # How It Works
 //!
-//! 1. Control inputs (thrust, rotation changes, etc.) are scheduled at specific simulation ticks
-//! 2. The system computes future states by integrating physics from the current state
-//! 3. When new inputs are added, affected future states are invalidated and recomputed
+//! 1. Control inputs (thrust, rotation changes, etc.) are scheduled at specific
+//!    simulation ticks
+//! 2. The system computes future states by integrating physics from the current
+//!    state
+//! 3. When new inputs are added, affected future states are invalidated and
+//!    recomputed
 //! 4. Entity transforms are synchronized with the current simulation tick
 //!
 //! # Coordinate System
@@ -36,12 +44,16 @@
 //! - Constant mass (no fuel consumption)
 //! - Instant thrust response
 //! - Perfect rigid body collisions
-//! 
+//!
 //! # Limitations
 //!
 //! - No continuous collision detection (may miss collisions at high velocities)
 //! - Limited accuracy from simple Euler integration
 //! - No support for non-rigid body deformation
+
+pub mod collisions;
+#[cfg(test)]
+mod test_utils;
 
 use std::{
     ops::{RangeBounds, RangeInclusive},
@@ -61,8 +73,6 @@ use collisions::{
 };
 
 use crate::prelude::*;
-
-pub mod collisions;
 
 #[derive(Bundle)]
 pub struct PhysicsBundle {
@@ -115,16 +125,17 @@ impl PhysicsBundle {
     }
 }
 
-/// Represents the complete physical state of a simulated entity at a point in time
+/// Represents the complete physical state of a simulated entity at a point in
+/// time
 ///
-/// This struct contains all the physical properties needed to simulate an entity's
-/// movement and interactions. It tracks both linear and angular motion, as well as
-/// thrust capabilities.
+/// This struct contains all the physical properties needed to simulate an
+/// entity's movement and interactions. It tracks both linear and angular
+/// motion, as well as thrust capabilities.
 ///
 /// # Properties
 ///
 /// * `pos` - Position in world space (meters)
-/// * `vel` - Velocity vector (meters/second) 
+/// * `vel` - Velocity vector (meters/second)
 /// * `rotation` - Orientation in radians (0 = facing +X)
 /// * `ang_vel` - Angular velocity (radians/second)
 /// * `mass` - Mass of entity in kilograms
@@ -135,17 +146,41 @@ impl PhysicsBundle {
 /// # Requirements
 ///
 /// Entities with PhysicsState must also have Transform and Timeline components
+/// Physical state of an entity at a point in time, including position, motion
+/// and thrust capabilities
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 #[require(Transform, Timeline)]
 pub struct PhysicsState {
+    /// Position in world space (meters)
+    /// Origin at center, +X right, +Y up
     pub pos: Vec2,
+
+    /// Velocity vector (meters/second)
     pub vel: Vec2,
+
+    /// Orientation angle in radians
+    /// 0 = facing +X axis, increases clockwise
     pub rotation: f32,
+
+    /// Angular velocity in radians/second
+    /// Positive = clockwise rotation
     pub ang_vel: f32,
+
+    /// Mass of entity in kilograms
+    /// Used for collision momentum calculations
     pub mass: f32,
-    pub current_thrust: f32, // Normalized thrust (-1.0 to 1.0)
-    pub max_thrust: f32,     // Maximum thrust force in Newtons
-    pub alive: bool,         // Entity destruction state
+
+    /// Current thrust level normalized to [-1.0, 1.0]
+    /// Negative = reverse thrust
+    pub current_thrust: f32,
+
+    /// Maximum thrust force in Newtons
+    /// Actual thrust force = current_thrust * max_thrust
+    pub max_thrust: f32,
+
+    /// Whether entity still exists or has been destroyed
+    /// False indicates entity should be despawned
+    pub alive: bool,
 }
 
 #[derive(Event, Debug)]
@@ -158,7 +193,8 @@ pub struct TimelineEventRequest {
     pub input: ControlInput,
 }
 
-/// Control inputs that can be scheduled to modify entity behavior at specific ticks
+/// Control inputs that can be scheduled to modify entity behavior at specific
+/// ticks
 ///
 /// These inputs represent discrete changes to an entity's movement parameters.
 /// They can be scheduled in advance to create complex movement patterns.
@@ -166,13 +202,13 @@ pub struct TimelineEventRequest {
 pub enum ControlInput {
     /// Set thrust level between -1.0 (full reverse) and 1.0 (full forward)
     SetThrust(f32),
-    
+
     /// Set absolute rotation in radians (0 = facing +X axis)
     SetRotation(f32),
-    
+
     /// Set angular velocity in radians/second (positive = clockwise)
     SetAngVel(f32),
-    
+
     /// Simultaneously set thrust (-1.0 to 1.0) and rotation (radians)
     /// Useful for immediate course corrections
     SetThrustAndRotation(f32, f32),
@@ -234,10 +270,12 @@ pub struct TrajectoryPreview {
 pub struct PhysicsSimulationPlugin<Label = FixedUpdate> {
     pub config: SimulationConfig,
     pub schedule: Label,
+    pub should_keep_alive: bool,
 }
 
 impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
     fn build(&self, app: &mut App) {
+        let should_keep_alive = self.should_keep_alive;
         app.add_event::<TimelineEventRequest>()
             .insert_resource(self.config.clone())
             .insert_resource(SpatialIndex::default())
@@ -251,7 +289,7 @@ impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
                     update_simulation_time,
                     compute_future_states,
                     sync_physics_state_transform,
-                    despawn_not_alive,
+                    despawn_not_alive.run_if(move || !should_keep_alive),
                 )
                     .chain(),
             )
@@ -699,6 +737,7 @@ mod tests {
             .add_plugins(PhysicsSimulationPlugin {
                 config: default(),
                 schedule: Update,
+                should_keep_alive: false,
             });
         app
     }
