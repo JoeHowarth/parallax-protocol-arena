@@ -11,8 +11,6 @@ use collisions::{Collider, SpatialIndex};
 use crafts::Faction;
 use parallax_protocol_arena::{physics::*, prelude::*};
 
-use crate::utils::screen_to_world;
-
 fn main() {
     App::new()
         .add_plugins((
@@ -328,11 +326,31 @@ fn update_trajectory_segments(
         &mut TrajectorySegment,
         &mut Transform,
         &mut Sprite,
+        &Children,
     )>,
+    mut visual_lines: Query<&mut Sprite, Without<TrajectorySegment>>,
+    camera_q: Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, Without<TrajectorySegment>),
+    >,
+    // windows: Query<&Window>,
+    preview: Option<Res<TrajectoryPreview>>,
     mut segments_map: Local<HashMap<(Entity, u64), Entity>>,
     mut preview_segments: Local<HashMap<(Entity, u64), Entity>>,
-    preview: Option<Res<TrajectoryPreview>>,
 ) {
+    // Calculate pixel-perfect line width in world space
+    let line_width = {
+        let pixel_width = 3.;
+        let (camera, camera_transform) = camera_q.single();
+        let world_diff = camera
+            .viewport_to_world_2d(camera_transform, Vec2::new(pixel_width, 0.))
+            .unwrap()
+            - camera
+                .viewport_to_world_2d(camera_transform, Vec2::new(0., 0.))
+                .unwrap();
+        world_diff.x
+    };
+
     let mut used_keys = HashSet::with_capacity(segments_map.len());
     for (craft_entity, timeline) in query.iter() {
         update_trajectory(
@@ -340,8 +358,10 @@ fn update_trajectory_segments(
             craft_entity,
             &mut commands,
             &mut segments_query,
+            &mut visual_lines,
             &mut segments_map,
             Some(&mut used_keys),
+            line_width,
         );
     }
 
@@ -351,22 +371,24 @@ fn update_trajectory_segments(
             preview.entity,
             &mut commands,
             &mut segments_query,
+            &mut visual_lines,
             &mut preview_segments,
             None,
+            line_width,
         ),
         None => {
             preview_segments
                 .values()
-                .for_each(|e| commands.entity(*e).despawn());
+                .for_each(|e| commands.entity(*e).despawn_recursive());
             preview_segments.clear();
         }
     }
 
-    // Is this the best way to clean this up???
+    // Clean up unused segments
     let mut to_delete = Vec::new();
     for (k, e) in segments_map.iter() {
         if !used_keys.contains(k) {
-            commands.entity(*e).despawn();
+            commands.entity(*e).despawn_recursive();
             to_delete.push(*k);
         }
     }
@@ -385,9 +407,12 @@ fn update_trajectory(
         &mut TrajectorySegment,
         &mut Transform,
         &mut Sprite,
+        &Children,
     )>,
+    visual_lines: &mut Query<&mut Sprite, Without<TrajectorySegment>>,
     segments_map: &mut HashMap<(Entity, u64), Entity>,
     mut used_keys_or_is_preview: Option<&mut HashSet<(Entity, u64)>>,
+    line_width: f32,
 ) {
     let positions = timeline
         .future_states
@@ -403,7 +428,6 @@ fn update_trajectory(
 
             let length = (end_pos - start_pos).length();
             let angle = (end_pos - start_pos).y.atan2((end_pos - start_pos).x);
-
             let center_pos = (start_pos + end_pos) / 2.0;
 
             used_keys_or_is_preview
@@ -417,8 +441,11 @@ fn update_trajectory(
                     commands
                         .spawn((TrajectorySegmentBundle {
                             sprite_bundle: Sprite {
-                                color: Color::srgba(1.0, 1.0, 1.0, 0.5),
-                                custom_size: Some(Vec2::new(length, 2.0)),
+                                color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+                                custom_size: Some(Vec2::new(
+                                    length,
+                                    line_width * 5.,
+                                )),
                                 ..default()
                             },
                             transform: Transform::from_translation(
@@ -434,12 +461,16 @@ fn update_trajectory(
                                 is_preview: used_keys_or_is_preview.is_none(),
                             },
                         },))
+                        .with_child(Sprite::from_color(
+                            Color::srgba(0.5, 0.5, 0.5, 0.5),
+                            Vec2::new(length, line_width),
+                        ))
                         .id(),
                 );
                 continue;
             };
 
-            let Ok((_entity, mut segment, mut transform, mut sprite)) =
+            let Ok((_entity, mut segment, mut transform, mut sprite, children)) =
                 segments_query.get_mut(*seg_ent)
             else {
                 panic!("oops");
@@ -454,7 +485,14 @@ fn update_trajectory(
             transform.translation = Vec3::from2(center_pos);
             transform.rotation = Quat::from_rotation_z(angle);
 
-            sprite.custom_size.as_mut().unwrap().x = length;
+            sprite.custom_size = Some(Vec2::new(length, line_width * 5.));
+            if let Ok(mut sprite) = visual_lines.get_mut(children[0]) {
+                let Some(size) = sprite.custom_size.as_mut() else {
+                    continue;
+                };
+                size.x = length;
+                size.y = line_width;
+            }
         }
     }
 }
@@ -472,6 +510,7 @@ fn handle_engine_input(
     spatial_index: Res<SpatialIndex>,
 ) {
     for drag_start in drag_start_r.read() {
+        println!("Drag start");
         let Ok(seg) = segments.get(drag_start.target) else {
             warn!("Segment being dragged doesn't exist");
             continue;
@@ -502,15 +541,21 @@ fn handle_engine_input(
     }
 
     for drag in drag_r.read() {
+        println!("Drag continue");
         let Ok(seg) = segments.get(drag.target) else {
+            info!("Drag segment doesn't exist");
             continue;
         };
         let Some(preview) = preview.as_mut() else {
+            info!("Preview doesn't exist");
             continue;
         };
         let craft_entity = seg.craft_entity;
 
-        let world_drag = screen_to_world(drag.distance);
+        // convert to world orientation
+        let mut world_drag = drag.distance;
+        world_drag.y *= -1.;
+
         let (collider, _) = timelines.get(seg.craft_entity).unwrap();
 
         // Patch preview timeline
@@ -540,7 +585,9 @@ fn handle_engine_input(
             commands.remove_resource::<TrajectoryPreview>();
             continue;
         };
-        let world_drag = screen_to_world(drag_end.distance);
+        // convert to world orientation
+        let mut world_drag = drag_end.distance;
+        world_drag.y *= -1.;
 
         info!(
             ?world_drag,
@@ -568,24 +615,33 @@ fn handle_engine_input(
 fn update_segment_visuals(
     mut out: EventReader<Pointer<Out>>,
     mut over: EventReader<Pointer<Over>>,
-    mut query: Query<(&mut Sprite, &TrajectorySegment)>,
+    query: Query<(&Children, &TrajectorySegment)>,
+    mut visual_lines: Query<&mut Sprite, Without<TrajectorySegment>>,
 ) {
     for e in out.read() {
-        let Ok((mut sprite, segment)) = query.get_mut(e.target) else {
+        let Ok((children, segment)) = query.get(e.target) else {
             continue;
         };
         let alpha = if segment.is_preview { 0.25 } else { 0.5 };
-        sprite.color = Color::srgba(1.0, 1.0, 1.0, alpha);
-        sprite.custom_size.as_mut().unwrap().y = 2.0;
+        let Ok(mut sprite) = visual_lines.get_mut(children[0]) else {
+            error!("Trajectory segment does not have a visual line child");
+            continue;
+        };
+        sprite.color = Color::srgba(0.5, 0.5, 0.5, alpha);
+        // sprite.custom_size.as_mut().unwrap().y = 2.0;
     }
 
     for e in over.read() {
-        let Ok((mut sprite, segment)) = query.get_mut(e.target) else {
+        let Ok((children, segment)) = query.get(e.target) else {
             continue;
         };
         // TODO: is hovering a preview even something we should support??
         let alpha = if segment.is_preview { 0.5 } else { 1.0 };
-        sprite.color = Color::srgba(1.0, 1.0, 1.0, alpha);
-        sprite.custom_size.as_mut().unwrap().y = 5.0;
+        let Ok(mut sprite) = visual_lines.get_mut(children[0]) else {
+            error!("Trajectory segment does not have a visual line child");
+            continue;
+        };
+        sprite.color = Color::srgba(0.5, 1.0, 0.5, alpha);
+        // sprite.custom_size.as_mut().unwrap().y = 5.0;
     }
 }

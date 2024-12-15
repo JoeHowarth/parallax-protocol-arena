@@ -73,15 +73,15 @@ impl Vec3Ext for Vec3 {
 /// Convert screen coordinates to world coordinates
 /// Screen: (0,0) at top-left, +y down
 /// World: (0,0) at center, +y up
-pub fn screen_to_world(screen_pos: Vec2) -> Vec2 {
-    Vec2::new(screen_pos.x, -screen_pos.y) // Just flip y for now
-}
+// pub fn screen_to_world(screen_pos: Vec2) -> Vec2 {
+//     Vec2::new(screen_pos.x, -screen_pos.y) // Just flip y for now
+// }
 
 /// Convert world coordinates to screen coordinates
-pub fn world_to_screen(world_pos: Vec2) -> Vec2 {
-    Vec2::new(world_pos.x, -world_pos.y) // Same operation, just documenting
-                                         // intent
-}
+// pub fn world_to_screen(world_pos: Vec2) -> Vec2 {
+//     Vec2::new(world_pos.x, -world_pos.y) // Same operation, just documenting
+//                                          // intent
+// }
 
 /// Calculate intersection point of a ray originating inside an AABB
 ///

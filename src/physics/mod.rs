@@ -433,7 +433,7 @@ fn compute_future_states(
 
     for i in 0..3 {
         let tick = simulation_config.current_tick;
-        eprintln!("\n[{i}th Iteration]\n");
+        // eprintln!("\n[{i}th Iteration]\n");
         for (e, collider, current_state, mut timeline) in query.iter_mut() {
             // ensure timline has value for current tick
             if !timeline.future_states.contains_key(&(tick - 1)) {
@@ -469,7 +469,7 @@ fn compute_future_states(
         }
 
         let Some(interaction) = interaction else {
-            info!("Loop finished with no interaction to resolve. Done");
+            // info!("Loop finished with no interaction to resolve. Done");
             return;
         };
 
@@ -597,11 +597,11 @@ impl Timeline {
                 interaction: None,
             };
         }
-        eprintln!(
-            "start: {start_tick}, end: {end_tick}, current: {current_tick}, \
-             last_computed: {}",
-            self.last_computed_tick
-        );
+        // eprintln!(
+        //     "start: {start_tick}, end: {end_tick}, current: {current_tick}, \
+        //      last_computed: {}",
+        //     self.last_computed_tick
+        // );
 
         let mut state =
             self.future_states.get(&(start_tick - 1)).unwrap().clone();
