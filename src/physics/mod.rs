@@ -423,7 +423,8 @@ impl PhysicsState {
 }
 
 fn compute_future_states(
-    simulation_config: Res<SimulationConfig>,
+    // mut for pausing
+    mut simulation_config: ResMut<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, &Collider, &PhysicsState, &mut Timeline)>,
 ) {
@@ -473,19 +474,21 @@ fn compute_future_states(
             return;
         };
 
-        let Ok([ (a_e, a_col, _, mut a_tl), // fmt
-          (b_e, b_col, _, mut b_tl) // fmt
-        ]) = query.get_many_mut(interaction.entities) else {
-            dbg!(&interaction);
-            panic!("whoops")
-        };
-        resolve_collisions(
-            interaction.tick,
-            (a_e, a_col, &mut a_tl),
-            (b_e, b_col, &mut b_tl),
-            seconds_per_tick,
-            &mut spatial_index,
-        );
+        match query.get_many_mut(interaction.entities) {
+            Ok([mut a, mut b]) => {
+                resolve_collisions(
+                    interaction.tick,
+                    (a.0, a.1, &mut a.3),
+                    (b.0, b.1, &mut b.3),
+                    seconds_per_tick,
+                    &mut spatial_index,
+                );
+            }
+            Err(e) => {
+                simulation_config.paused = true;
+                println!("Error resolving collisions: {e:?}, {interaction:?}");
+            }
+        }
     }
     panic!(
         "Exited loop without resolving all interactions. Suggests infinite \

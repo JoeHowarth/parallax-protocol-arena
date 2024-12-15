@@ -462,7 +462,12 @@ fn update_trajectory(
                             },
                         },))
                         .with_child(Sprite::from_color(
-                            Color::srgba(0.5, 0.5, 0.5, 0.5),
+                            Color::srgba(
+                                0.5,
+                                0.5,
+                                0.5,
+                                (end_tick % 2) as f32 * 0.5,
+                            ),
                             Vec2::new(length, line_width),
                         ))
                         .id(),
@@ -627,7 +632,8 @@ fn update_segment_visuals(
             error!("Trajectory segment does not have a visual line child");
             continue;
         };
-        sprite.color = Color::srgba(0.5, 0.5, 0.5, alpha);
+        sprite.color =
+            Color::srgba(0.5, 0.5, 0.5, (segment.end_tick % 2) as f32 * alpha);
         // sprite.custom_size.as_mut().unwrap().y = 2.0;
     }
 
