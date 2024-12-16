@@ -1,4 +1,4 @@
-# Parallax Paradox: Arena
+# Parallax Protocol: Arena
 
 Arena is the first milestone in the Parallax Protocol project, featuring intense 2-player space combat where skill, creativity, and tactical planning determine victory. It serves as both a compelling competitive game and a foundation for our broader vision: commanding vast networks of ships and resources across the solar system under realistic light-speed communication constraints.
 
