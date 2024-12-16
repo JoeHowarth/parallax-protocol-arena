@@ -5,7 +5,7 @@ pub mod crafts;
 // pub mod keyboard_controller;
 pub mod physics;
 pub mod prelude;
-// pub mod subsystems;
+pub mod subsystems;
 pub mod utils;
 
 use std::borrow::Cow;
@@ -31,3 +31,6 @@ pub fn health_despawn(mut commands: Commands, query: Query<(Entity, &Health)>) {
         }
     }
 }
+
+#[derive(Resource, Debug)]
+pub struct Selected(pub Entity);

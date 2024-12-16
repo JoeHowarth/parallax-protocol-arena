@@ -420,6 +420,10 @@ impl PhysicsState {
             }
         }
     }
+
+    pub fn dir(&self) -> Vec2 {
+        Vec2::from_rot(self.rotation)
+    }
 }
 
 fn compute_future_states(

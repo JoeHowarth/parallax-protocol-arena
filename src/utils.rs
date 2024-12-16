@@ -47,6 +47,9 @@ impl RectExt for BRect {
 
 pub trait Vec2Ext {
     fn to3(&self) -> Vec3;
+    fn from_rot(rot: f32) -> Vec2 {
+        Vec2::new(rot.cos(), rot.sin())
+    }
 }
 
 impl Vec2Ext for Vec2 {

@@ -10,6 +10,7 @@ use bevy::{
 use collisions::{Collider, SpatialIndex};
 use crafts::Faction;
 use parallax_protocol_arena::{physics::*, prelude::*};
+use subsystems::plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin};
 
 fn main() {
     App::new()
@@ -43,6 +44,7 @@ fn main() {
                 should_keep_alive: false,
             },
             AsteroidPlugin,
+            PlasmaCannonPlugin,
         ))
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, health_despawn)
@@ -92,6 +94,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         ))
         .id();
     info!(ship_entity = ship_e.index(), "Ship Entity");
+    commands.insert_resource(Selected(ship_e));
     // commands.spawn(ship_bundle(
     //     "Ship_rotated.png",
     //     10.,
@@ -131,6 +134,7 @@ pub fn ship_bundle(
             color: faction.sprite_color(),
             ..default()
         },
+        PlasmaCannon::default(),
         PhysicsBundle::new_with_events(
             PhysicsState {
                 pos,
