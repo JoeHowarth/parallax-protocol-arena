@@ -127,27 +127,6 @@ impl PhysicsBundle {
 
 /// Represents the complete physical state of a simulated entity at a point in
 /// time
-///
-/// This struct contains all the physical properties needed to simulate an
-/// entity's movement and interactions. It tracks both linear and angular
-/// motion, as well as thrust capabilities.
-///
-/// # Properties
-///
-/// * `pos` - Position in world space (meters)
-/// * `vel` - Velocity vector (meters/second)
-/// * `rotation` - Orientation in radians (0 = facing +X)
-/// * `ang_vel` - Angular velocity (radians/second)
-/// * `mass` - Mass of entity in kilograms
-/// * `current_thrust` - Current thrust level (-1.0 to 1.0)
-/// * `max_thrust` - Maximum thrust force in Newtons
-/// * `alive` - Whether entity still exists (false = destroyed)
-///
-/// # Requirements
-///
-/// Entities with PhysicsState must also have Transform and Timeline components
-/// Physical state of an entity at a point in time, including position, motion
-/// and thrust capabilities
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 #[require(Transform, Timeline)]
 pub struct PhysicsState {
@@ -258,17 +237,9 @@ impl Default for SimulationConfig {
     }
 }
 
-#[derive(Resource)]
-pub struct TrajectoryPreview {
-    pub entity: Entity,
-    pub start_tick: u64,
-    pub timeline: Timeline,
-}
-
 /// Plugin that sets up the physics simulation systems
 #[derive(Clone, Default, Debug)]
 pub struct PhysicsSimulationPlugin<Label = FixedUpdate> {
-    pub config: SimulationConfig,
     pub schedule: Label,
     pub should_keep_alive: bool,
 }
@@ -277,12 +248,7 @@ impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
     fn build(&self, app: &mut App) {
         let should_keep_alive = self.should_keep_alive;
         app.add_event::<TimelineEventRequest>()
-            .insert_resource(self.config.clone())
             .insert_resource(SpatialIndex::default())
-            .insert_resource(Time::<Fixed>::from_hz(
-                self.config.ticks_per_second as f64
-                    * self.config.time_dilation as f64,
-            ))
             .add_systems(
                 self.schedule.clone(),
                 (
@@ -293,14 +259,7 @@ impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
                 )
                     .chain(),
             )
-            .add_systems(
-                Update,
-                (
-                    time_dilation_control,
-                    viz_colliders,
-                    process_timeline_events,
-                ),
-            );
+            .add_systems(Update, (viz_colliders, process_timeline_events));
     }
 }
 
@@ -422,12 +381,12 @@ impl PhysicsState {
     }
 
     pub fn dir(&self) -> Vec2 {
-        Vec2::from_rot(self.rotation)
+        Vec2::from_angle(self.rotation)
     }
 }
 
 fn compute_future_states(
-    // mut for pausing
+    // TODO: break apart this config so we don't need to mutate it to pause
     mut simulation_config: ResMut<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, &Collider, &PhysicsState, &mut Timeline)>,
@@ -694,38 +653,10 @@ fn sync_physics_state_transform(
         transform.rotation = Quat::from_rotation_z(phys_state.rotation);
         timeline
             .future_states
-            .remove(&(sim_state.current_tick.saturating_sub(2)));
-    }
-}
-
-fn time_dilation_control(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut config: ResMut<SimulationConfig>,
-    mut time: ResMut<Time<Fixed>>,
-) {
-    let mut changed = false;
-
-    if keys.just_pressed(KeyCode::BracketRight) {
-        config.time_dilation *= 2.0;
-        changed = true;
-    }
-    if keys.just_pressed(KeyCode::BracketLeft) {
-        config.time_dilation *= 0.5;
-        changed = true;
-    }
-    if keys.just_pressed(KeyCode::KeyP) {
-        config.paused = !config.paused;
-    }
-
-    if changed {
-        time.set_timestep_hz(
-            config.ticks_per_second as f64 * config.time_dilation as f64,
-        );
-        info!(
-            "Simulation speed: {:.1}x ({}Hz)",
-            config.time_dilation,
-            config.ticks_per_second as f64 * config.time_dilation as f64
-        );
+            .remove(&(sim_state.current_tick.saturating_sub(1)));
+        timeline
+            .events
+            .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));
     }
 }
 
@@ -741,8 +672,8 @@ mod tests {
     fn create_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(ParallaxProtocolArenaPlugin { config: default() })
             .add_plugins(PhysicsSimulationPlugin {
-                config: default(),
                 schedule: Update,
                 should_keep_alive: false,
             });

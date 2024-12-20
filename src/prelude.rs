@@ -6,6 +6,7 @@ pub use ::bevy::{
     utils::{HashMap, HashSet},
 };
 pub use ::std::{
+    collections::VecDeque,
     str::FromStr,
     sync::Mutex,
     time::{Duration, Instant},
@@ -13,4 +14,9 @@ pub use ::std::{
 pub use bevy_vector_shapes::prelude::*;
 pub use strum::{EnumIter, EnumString, IntoEnumIterator};
 
-pub use crate::{crafts::*, utils::*, *};
+pub use crate::{
+    crafts::*,
+    physics::{PhysicsBundle, PhysicsState, Timeline, TimelineEvent},
+    utils::*,
+    *,
+};
