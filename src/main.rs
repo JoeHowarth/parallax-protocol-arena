@@ -9,6 +9,7 @@ use bevy::{
 };
 use collisions::{Collider, SpatialIndex};
 use parallax_protocol_arena::{
+    client::ClientPlugin,
     crafts::Faction,
     health_despawn,
     physics::*,
@@ -35,7 +36,7 @@ fn main() {
             bevy_pancam::PanCamPlugin,
         ))
         .add_plugins((
-            ParallaxProtocolArenaPlugin {
+            ParallaxProtocolArenaPlugin::<FixedUpdate> {
                 config: (|| {
                     let tps = 30;
                     SimulationConfig {
@@ -45,6 +46,8 @@ fn main() {
                         ..default()
                     }
                 })(),
+                physics: PhysicsSimulationPlugin::<FixedUpdate>::default(),
+                client: Some(ClientPlugin::default()),
             },
             AsteroidPlugin,
             PlasmaCannonPlugin,

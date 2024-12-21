@@ -162,7 +162,7 @@ pub struct PhysicsState {
     pub alive: bool,
 }
 
-#[derive(Event, Debug)]
+#[derive(Event, Debug, Reflect)]
 pub struct TimelineEventRequest {
     /// Entity to apply to
     pub entity: Entity,
@@ -172,7 +172,7 @@ pub struct TimelineEventRequest {
     pub input: ControlInput,
 }
 
-#[derive(Event, Debug)]
+#[derive(Event, Debug, Reflect)]
 pub struct TimelineEventRemovalRequest {
     /// Entity to apply to
     pub entity: Entity,
@@ -187,7 +187,7 @@ pub struct TimelineEventRemovalRequest {
 ///
 /// These inputs represent discrete changes to an entity's movement parameters.
 /// They can be scheduled in advance to create complex movement patterns.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum ControlInput {
     /// Set thrust level between -1.0 (full reverse) and 1.0 (full forward)
     SetThrust(f32),
@@ -203,7 +203,7 @@ pub enum ControlInput {
     SetThrustAndRotation(f32, f32),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Reflect)]
 pub enum TimelineEvent {
     Control(ControlInput),
     Collision(Collision),
@@ -248,10 +248,19 @@ impl Default for SimulationConfig {
 }
 
 /// Plugin that sets up the physics simulation systems
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct PhysicsSimulationPlugin<Label = FixedUpdate> {
     pub schedule: Label,
     pub should_keep_alive: bool,
+}
+
+impl Default for PhysicsSimulationPlugin {
+    fn default() -> Self {
+        Self {
+            schedule: FixedUpdate,
+            should_keep_alive: false,
+        }
+    }
 }
 
 impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
@@ -702,14 +711,16 @@ mod tests {
 
     fn create_test_app() -> App {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(crate::ParallaxProtocolArenaPlugin {
+        app.add_plugins(MinimalPlugins).add_plugins(
+            crate::ParallaxProtocolArenaPlugin {
                 config: default(),
-            })
-            .add_plugins(PhysicsSimulationPlugin {
-                schedule: Update,
-                should_keep_alive: false,
-            });
+                physics: PhysicsSimulationPlugin {
+                    schedule: Update,
+                    should_keep_alive: false,
+                },
+                client: None,
+            },
+        );
         app
     }
 

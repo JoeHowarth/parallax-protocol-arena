@@ -8,10 +8,9 @@ pub mod trajectory;
 
 pub use event_markers::EventMarkerPlugin;
 pub use input_handler::InputHandlerPlugin;
-use input_handler::TimelineEventMarker;
 pub use trajectory::TrajectoryPlugin;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ClientPlugin {
     pub event_marker: EventMarkerPlugin,
     pub input_handler: InputHandlerPlugin,
@@ -26,7 +25,6 @@ impl Plugin for ClientPlugin {
             self.trajectory,
         ))
         .insert_resource(ScreenLenToWorld(1.))
-        .add_systems(Startup, register_component_hooks)
         .add_systems(PreUpdate, calc_screen_length_to_world);
     }
 }
@@ -50,18 +48,6 @@ fn calc_screen_length_to_world(
             screen_length_to_world.0 = world_diff.x;
             Ok(())
         })();
-}
-
-fn register_component_hooks(world: &mut World) {
-    world.register_component_hooks::<Timeline>().on_insert(
-        |mut world: bevy::ecs::world::DeferredWorld, entity: Entity, _| {
-            info!("Adding components to entity that has timeline");
-            world
-                .commands()
-                .entity(entity)
-                .insert(EntityTimeline::<TimelineEventMarker>::default());
-        },
-    );
 }
 
 pub type EntityTimeline<T> = GenericSparseTimeline<Entity, T>;

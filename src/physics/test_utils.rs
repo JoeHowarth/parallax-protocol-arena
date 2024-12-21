@@ -141,8 +141,10 @@ impl CollisionScenario {
     pub fn run(&self) -> (PhysicsState, PhysicsState) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::ParallaxProtocolArenaPlugin {
+                config: default(),
+            })
             .add_plugins(PhysicsSimulationPlugin {
-                config: TEST_CONFIG,
                 schedule: Update,
                 should_keep_alive: true,
             });

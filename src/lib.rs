@@ -19,11 +19,15 @@ use crate::{
     prelude::*,
 };
 
-pub struct ParallaxProtocolArenaPlugin {
+pub struct ParallaxProtocolArenaPlugin<Label = FixedUpdate> {
     pub config: SimulationConfig,
+    pub physics: PhysicsSimulationPlugin<Label>,
+    pub client: Option<ClientPlugin>,
 }
 
-impl Plugin for ParallaxProtocolArenaPlugin {
+impl<Label: Send + Sync + 'static> Plugin
+    for ParallaxProtocolArenaPlugin<Label>
+{
     fn build(&self, app: &mut App) {
         app.insert_resource(self.config.clone()).insert_resource(
             Time::<Fixed>::from_hz(
@@ -37,8 +41,10 @@ impl Plugin for ParallaxProtocolArenaPlugin {
                 schedule: FixedUpdate,
                 should_keep_alive: false,
             },
-            ClientPlugin::default(),
         ));
+        if let Some(client) = &self.client {
+            app.add_plugins(client.clone());
+        }
     }
 }
 

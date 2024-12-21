@@ -36,7 +36,7 @@ pub fn viz_colliders(
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Reflect)]
 pub struct Collision {
     pub tick: u64,
     pub this: Entity,
@@ -45,7 +45,7 @@ pub struct Collision {
     pub other_result: EntityCollisionResult,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Reflect)]
 pub enum EntityCollisionResult {
     Destroyed,
     Survives { post_pos: Vec2, post_vel: Vec2 },

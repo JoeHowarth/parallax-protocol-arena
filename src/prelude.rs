@@ -9,6 +9,7 @@ pub use std::{
 pub use bevy::{
     color::palettes::css,
     ecs::entity::{EntityHashMap, EntityHashSet},
+    math::vec2,
     prelude::*,
     utils::{HashMap, HashSet},
 };
