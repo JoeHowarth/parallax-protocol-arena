@@ -52,6 +52,7 @@
 //! - No support for non-rigid body deformation
 
 pub mod collisions;
+pub mod entity_major;
 #[cfg(test)]
 mod test_utils;
 
@@ -381,30 +382,37 @@ impl PhysicsState {
         }
     }
 
-    fn apply_control_event(&mut self, event: Option<&TimelineEvent>) {
+    fn apply_input_event(&mut self, event: Option<&ControlInput>) {
         use TimelineEvent::{Collision, Control};
         let Some(event) = event else {
             return;
         };
         match event {
-            Control(control_event) => match control_event {
-                ControlInput::SetThrust(thrust) => {
-                    self.current_thrust = *thrust;
-                }
-                ControlInput::SetRotation(rotation) => {
-                    self.rotation = *rotation;
-                    self.ang_vel = 0.;
-                }
-                ControlInput::SetThrustAndRotation(thrust, rotation) => {
-                    self.current_thrust = *thrust;
-                    self.rotation = *rotation;
-                    self.ang_vel = 0.;
-                }
-                ControlInput::SetAngVel(ang_vel) => {
-                    self.ang_vel = *ang_vel;
-                }
-            },
-            Collision(physics_event) => {}
+            ControlInput::SetThrust(thrust) => {
+                self.current_thrust = *thrust;
+            }
+            ControlInput::SetRotation(rotation) => {
+                self.rotation = *rotation;
+                self.ang_vel = 0.;
+            }
+            ControlInput::SetThrustAndRotation(thrust, rotation) => {
+                self.current_thrust = *thrust;
+                self.rotation = *rotation;
+                self.ang_vel = 0.;
+            }
+            ControlInput::SetAngVel(ang_vel) => {
+                self.ang_vel = *ang_vel;
+            }
+        }
+    }
+
+    fn apply_control_event(&mut self, event: Option<&TimelineEvent>) {
+        use TimelineEvent::{Collision, Control};
+        match event {
+            Some(Control(control_event)) => {
+                self.apply_input_event(Some(control_event))
+            }
+            _ => {}
         }
     }
 
@@ -704,7 +712,7 @@ fn sync_physics_state_transform(
 mod tests {
     use std::{f32::consts::PI, time::Duration};
 
-    use assert_approx_eq::assert_approx_eq;
+    use assertables::assert_approx_eq;
     use bevy::{app::App, time::Time};
 
     use super::{test_utils::*, *};
@@ -1035,13 +1043,13 @@ mod tests {
         let next_state = state.integrate(delta);
 
         // Position should change based on existing velocity
-        assert_approx_eq!(next_state.pos.x, 10.0 + 2.0 * delta, 1e-6);
-        assert_approx_eq!(next_state.pos.y, 5.0 + 1.0 * delta, 1e-6);
+        assert_approx_eq!(next_state.pos.x, 10.0 + 2.0 * delta);
+        assert_approx_eq!(next_state.pos.y, 5.0 + 1.0 * delta);
         // Velocity should remain unchanged (no forces)
-        assert_approx_eq!(next_state.vel.x, 2.0, 1e-6);
-        assert_approx_eq!(next_state.vel.y, 1.0, 1e-6);
+        assert_approx_eq!(next_state.vel.x, 2.0);
+        assert_approx_eq!(next_state.vel.y, 1.0);
         // Rotation should change based on angular velocity
-        assert_approx_eq!(next_state.rotation, 0.0 + 0.5 * delta, 1e-6);
+        assert_approx_eq!(next_state.rotation, 0.0 + 0.5 * delta);
 
         // Case 2: Full thrust to the right (rotation = 0)
         let state = PhysicsState {
@@ -1062,10 +1070,10 @@ mod tests {
         // Acceleration = 100N / 2kg = 50 m/s²
         // Δv = 50 m/s² * (1/60) s = 0.8333... m/s
         // Position shouldn't change yet since initial velocity was zero
-        assert_approx_eq!(next_state.vel.x, 50.0 * delta, 1e-6);
-        assert_approx_eq!(next_state.vel.y, 0.0, 1e-6);
-        assert_approx_eq!(next_state.pos.x, 0.0, 1e-6); // Fixed: position doesn't change first frame
-        assert_approx_eq!(next_state.pos.y, 0.0, 1e-6);
+        assert_approx_eq!(next_state.vel.x, 50.0 * delta);
+        assert_approx_eq!(next_state.vel.y, 0.0);
+        assert_approx_eq!(next_state.pos.x, 0.0); // Fixed: position doesn't change first frame
+        assert_approx_eq!(next_state.pos.y, 0.0);
 
         // Case 3: Full thrust at 45 degrees
         let state = PhysicsState {
@@ -1085,10 +1093,10 @@ mod tests {
         // Each component should be 100N * √2/2 = 70.71... N
         // Acceleration per component = 35.355... m/s²
         let expected_accel = 50.0 / 2.0_f32.sqrt();
-        assert_approx_eq!(next_state.vel.x, expected_accel * delta, 1e-6);
-        assert_approx_eq!(next_state.vel.y, expected_accel * delta, 1e-6);
-        assert_approx_eq!(next_state.pos.x, 0.0, 1e-6); // Fixed: position doesn't change first frame
-        assert_approx_eq!(next_state.pos.y, 0.0, 1e-6);
+        assert_approx_eq!(next_state.vel.x, expected_accel * delta);
+        assert_approx_eq!(next_state.vel.y, expected_accel * delta);
+        assert_approx_eq!(next_state.pos.x, 0.0); // Fixed: position doesn't change first frame
+        assert_approx_eq!(next_state.pos.y, 0.0);
 
         // Let's verify position changek after a second integration step
         let third_state = next_state.integrate(delta);
@@ -1096,13 +1104,8 @@ mod tests {
             third_state.pos.x,
             (expected_accel * delta) * delta, /* Using velocity from
                                                * previous state */
-            1e-6
         );
-        assert_approx_eq!(
-            third_state.pos.y,
-            (expected_accel * delta) * delta,
-            1e-6
-        );
+        assert_approx_eq!(third_state.pos.y, (expected_accel * delta) * delta,);
     }
 
     #[test]

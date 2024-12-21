@@ -209,12 +209,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "assert_approx_eq"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c07dab4369547dbe5114677b33fbbf724971019f3818172d59a97a61c774ffd"
-
-[[package]]
 name = "assert_type_match"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -224,6 +218,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "assertables"
+version = "9.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0082388b8564898f945b04215e800e800a164af15307d8dfe714b02cc69356e9"
 
 [[package]]
 name = "async-broadcast"
@@ -3154,7 +3154,7 @@ name = "parallax-protocol-arena"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "assert_approx_eq",
+ "assertables",
  "bevy",
  "bevy_pancam",
  "bevy_turborand",

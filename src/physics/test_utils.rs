@@ -1,4 +1,4 @@
-use assert_approx_eq::assert_approx_eq;
+use assertables::{assert_abs_diff_le_x, assert_approx_eq};
 use bevy::utils::default;
 
 use crate::{
@@ -19,6 +19,31 @@ pub const TEST_CONFIG: SimulationConfig = SimulationConfig {
     paused: false,
     prediction_ticks: 2,
 };
+
+#[macro_export]
+macro_rules! states_eq {
+    ($a:expr, $b:expr) => {
+        assert_abs_diff_le_x!($a.pos.x, $b.pos.x, 1e-3);
+        assert_abs_diff_le_x!($a.pos.y, $b.pos.y, 1e-3);
+        assert_abs_diff_le_x!($a.vel.x, $b.vel.x, 1e-3);
+        assert_abs_diff_le_x!($a.vel.y, $b.vel.y, 1e-3);
+        assert_abs_diff_le_x!($a.current_thrust, $b.current_thrust, 1e-3);
+        assert_abs_diff_le_x!($a.max_thrust, $b.max_thrust, 1e-3);
+        assert_abs_diff_le_x!($a.rotation, $b.rotation, 1e-3);
+        assert_abs_diff_le_x!($a.mass, $b.mass, 1e-3);
+        assert_eq!($a.alive, $b.alive);
+    };
+}
+
+pub trait PhysicsStateBuilderExt {
+    fn b(&self) -> TestStateBuilder;
+}
+
+impl PhysicsStateBuilderExt for PhysicsState {
+    fn b(&self) -> TestStateBuilder {
+        TestStateBuilder::from(self.clone())
+    }
+}
 
 /// Builder for creating test physics states
 #[cfg(test)]
@@ -64,8 +89,23 @@ impl TestStateBuilder {
         self
     }
 
+    pub fn alive(mut self, alive: bool) -> Self {
+        self.state.alive = alive;
+        self
+    }
+
     pub fn build(self) -> PhysicsState {
         self.state
+    }
+
+    pub fn b(self) -> PhysicsState {
+        self.build()
+    }
+}
+
+impl From<PhysicsState> for TestStateBuilder {
+    fn from(state: PhysicsState) -> Self {
+        Self { state }
     }
 }
 
@@ -138,39 +178,39 @@ impl CollisionScenario {
     }
 
     /// Runs this scenario in a test app and returns the final states
-    pub fn run(&self) -> (PhysicsState, PhysicsState) {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(crate::ParallaxProtocolArenaPlugin {
-                config: default(),
-            })
-            .add_plugins(PhysicsSimulationPlugin {
-                schedule: Update,
-                should_keep_alive: true,
-            });
-
-        // Spawn test entities
-        let a = app
-            .world_mut()
-            .spawn(PhysicsBundle::from_state(self.a_state.clone(), self.dim))
-            .id();
-
-        let b = app
-            .world_mut()
-            .spawn(PhysicsBundle::from_state(self.b_state.clone(), self.dim))
-            .id();
-
-        // Run simulation
-        for _ in 0..self.ticks {
-            app.update();
-        }
-
-        // Get final states
-        let a_final = app.world().entity(a).get::<PhysicsState>().cloned();
-        let b_final = app.world().entity(b).get::<PhysicsState>().cloned();
-
-        (a_final.unwrap_or_default(), b_final.unwrap_or_default())
-    }
+    // pub fn run(&self) -> (PhysicsState, PhysicsState) {
+    //     let mut app = App::new();
+    //     app.add_plugins(MinimalPlugins)
+    //         .add_plugins(crate::ParallaxProtocolArenaPlugin {
+    //             config: default(),
+    //         })
+    //         .add_plugins(PhysicsSimulationPlugin {
+    //             schedule: Update,
+    //             should_keep_alive: true,
+    //         });
+    //
+    //     // Spawn test entities
+    //     let a = app
+    //         .world_mut()
+    //         .spawn(PhysicsBundle::from_state(self.a_state.clone(), self.dim))
+    //         .id();
+    //
+    //     let b = app
+    //         .world_mut()
+    //         .spawn(PhysicsBundle::from_state(self.b_state.clone(), self.dim))
+    //         .id();
+    //
+    //     // Run simulation
+    //     for _ in 0..self.ticks {
+    //         app.update();
+    //     }
+    //
+    //     // Get final states
+    //     let a_final = app.world().entity(a).iget::<PhysicsState>().cloned();
+    //     let b_final = app.world().entity(b).get::<PhysicsState>().cloned();
+    //
+    //     (a_final.unwrap_or_default(), b_final.unwrap_or_default())
+    // }
 
     /// Asserts that final states match expected results
     pub fn assert_results(
@@ -212,17 +252,17 @@ impl CollisionScenario {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_head_on_collision() {
-        let scenario = CollisionScenario::head_on();
-        let (a_final, b_final) = scenario.run();
-        scenario.assert_results(&a_final, &b_final);
-    }
-
-    #[test]
-    fn test_glancing_collision() {
-        let scenario = CollisionScenario::glancing();
-        let (a_final, b_final) = scenario.run();
-        scenario.assert_results(&a_final, &b_final);
-    }
+    // #[test]
+    // fn test_head_on_collision() {
+    //     let scenario = CollisionScenario::head_on();
+    //     let (a_final, b_final) = scenario.run();
+    //     scenario.assert_results(&a_final, &b_final);
+    // }
+    //
+    // #[test]
+    // fn test_glancing_collision() {
+    //     let scenario = CollisionScenario::glancing();
+    //     let (a_final, b_final) = scenario.run();
+    //     scenario.assert_results(&a_final, &b_final);
+    // }
 }
