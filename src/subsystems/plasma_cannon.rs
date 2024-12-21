@@ -1,7 +1,10 @@
 use bevy::color::palettes::css;
-use physics::{PhysicsBundle, PhysicsState, SimulationConfig};
 
-use crate::prelude::*;
+use crate::{
+    physics::{PhysicsBundle, PhysicsState, SimulationConfig},
+    prelude::*,
+    Selected,
+};
 
 pub struct PlasmaCannonPlugin;
 

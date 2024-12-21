@@ -6,17 +6,24 @@ use bevy::{
     math::{vec2, NormedVectorSpace},
     render::camera::ViewportConversionError,
 };
-use physics::{
-    collisions::{Collider, SpatialIndex},
-    ControlInput,
-    SimulationConfig,
-    TimelineEventRemovalRequest,
-    TimelineEventRequest,
+
+use super::{
+    trajectory::{TrajectoryPreview, TrajectorySegment},
+    EntityTimeline,
+    ScreenLenToWorld,
 };
-use trajectory::{TrajectoryPreview, TrajectorySegment};
+use crate::{
+    physics::{
+        collisions::{Collider, SpatialIndex},
+        ControlInput,
+        SimulationConfig,
+        TimelineEventRemovalRequest,
+        TimelineEventRequest,
+    },
+    prelude::*,
+};
 
-use crate::prelude::*;
-
+#[derive(Default, Clone, Copy)]
 pub struct InputHandlerPlugin;
 
 #[derive(Resource, Deref, DerefMut, Reflect)]
@@ -25,23 +32,20 @@ struct SelectedCraft(pub Entity);
 impl Plugin for InputHandlerPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SelectedCraft>()
-            .insert_resource(ScreenLenToWorld(1.))
             .insert_resource(InputMode::ThrustAndRotation)
             .add_systems(Startup, build_input_mode_ui)
             .add_systems(
                 FixedPostUpdate,
                 (
-                    GenericSparseTimeline::<TimelineEventMarker>::clear_system,
+                    EntityTimeline::<TimelineEventMarker>::clear_system,
                     sync_timeline_markers,
                 ),
             )
-            .add_systems(PreUpdate, calc_screen_length_to_world)
             .add_systems(
                 Update,
                 (
                     (
                         handle_input_mode,
-                        preview_lookahead,
                         (handle_engine_input.run_if(|mode: Res<InputMode>| {
                             matches!(*mode, InputMode::ThrustAndRotation)
                         })),
@@ -165,23 +169,6 @@ fn time_dilation_control(
     }
 }
 
-fn preview_lookahead(
-    colliders: Query<&Collider>,
-    mut preview: ResMut<TrajectoryPreview>,
-    simulation_config: Res<SimulationConfig>,
-    spatial_index: Res<SpatialIndex>,
-) {
-    let entity = preview.entity;
-    preview.timeline.lookahead(
-        entity,
-        simulation_config.current_tick,
-        1.0 / simulation_config.ticks_per_second as f32,
-        simulation_config.prediction_ticks,
-        colliders.get(entity).unwrap(),
-        &spatial_index,
-    );
-}
-
 fn handle_engine_input(
     mut drag_start_r: EventReader<Pointer<DragStart>>,
     mut drag_end_r: EventReader<Pointer<DragEnd>>,
@@ -292,7 +279,7 @@ fn handle_engine_input(
 }
 
 #[derive(Component, Clone)]
-struct TimelineEventMarker {
+pub struct TimelineEventMarker {
     tick: u64,
     craft: Entity,
     input: TimelineEvent,
@@ -324,78 +311,6 @@ impl TimelineEventMarker {
     }
 }
 
-#[derive(Component, Debug)]
-pub struct GenericSparseTimeline<C> {
-    pub map: BTreeMap<u64, C>,
-}
-
-impl<C> Default for GenericSparseTimeline<C> {
-    fn default() -> Self {
-        Self { map: default() }
-    }
-}
-
-impl<C: Send + Sync + 'static> GenericSparseTimeline<C> {
-    pub fn insert(&mut self, tick: u64, c: C) -> Option<C> {
-        self.map.insert(tick, c)
-    }
-
-    pub fn get(&self, tick: u64) -> Option<&C> {
-        self.map.get(&tick)
-    }
-
-    pub fn get_mut(&mut self, tick: u64) -> Option<&mut C> {
-        self.map.get_mut(&tick)
-    }
-
-    pub fn contains(&self, tick: u64) -> bool {
-        self.map.contains_key(&tick)
-    }
-
-    pub fn clear_system(
-        mut query: Query<&mut GenericSparseTimeline<C>>,
-        sim_config: Res<SimulationConfig>,
-    ) {
-        for mut timeline in query.iter_mut() {
-            timeline.map.retain(|k, v| *k >= sim_config.current_tick);
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct GenericDenseTimeline<C> {
-    pub base_tick: u64,
-    pub ring: VecDeque<C>,
-}
-
-impl<C> GenericDenseTimeline<C> {
-    pub fn push(&mut self, c: C) {
-        self.ring.push_back(c);
-    }
-
-    pub fn get(&self, tick: u64) -> Option<&C> {
-        self.ring.get((tick - self.base_tick) as usize)
-    }
-
-    pub fn get_mut(&mut self, tick: u64) -> Option<&mut C> {
-        self.ring
-            .get_mut((tick.checked_sub(self.base_tick)?) as usize)
-    }
-
-    /// Sets the value at tick to val if within domain returning
-    /// existing val, otherwise returns None
-    pub fn set(&mut self, mut val: C, tick: u64) -> Option<C> {
-        let idx = (tick.checked_sub(self.base_tick)?) as usize;
-        if idx < self.ring.len() {
-            let old = self.ring.get_mut(idx)?;
-            std::mem::swap(old, &mut val);
-            return Some(val);
-        } else {
-            None
-        }
-    }
-}
-
 /// Sync timeline events with timeline event marker entities
 /// Should be run after simulation update
 fn sync_timeline_markers(
@@ -403,7 +318,7 @@ fn sync_timeline_markers(
     mut timelines: Query<(
         Entity,
         &Timeline,
-        &mut GenericSparseTimeline<Entity>,
+        &mut EntityTimeline<TimelineEventMarker>,
     )>,
     mut markers: Query<(Entity, &mut TimelineEventMarker)>,
     mut alive: Local<EntityHashSet>,
@@ -415,38 +330,39 @@ fn sync_timeline_markers(
         timelines.iter_mut()
     {
         for (&tick, event) in timeline.events.iter() {
-            let mut spawn =
-                |marker_entity_timeline: &mut GenericSparseTimeline<Entity>| {
-                    let Some(phys) = timeline.future_states.get(&tick) else {
-                        error!("Bad");
-                        panic!("bad!");
-                    };
-
-                    let mut entity_commands =
-                        commands.spawn(TimelineEventMarker::bundle(
-                            phys,
-                            craft_entity,
-                            event.clone(),
-                            tick,
-                        ));
-
-                    // add click handlers if
-                    // event is a control event
-                    match event {
-                        TimelineEvent::Control(input) => {
-                            let input = input.clone();
-                            configure_marker_observers(
-                                craft_entity,
-                                input,
-                                &mut entity_commands,
-                            );
-                        }
-                        _ => {}
-                    }
-                    let marker_e = entity_commands.id();
-                    alive.insert(marker_e);
-                    marker_entity_timeline.insert(tick, marker_e);
+            let mut spawn = |marker_entity_timeline: &mut EntityTimeline<
+                TimelineEventMarker,
+            >| {
+                let Some(phys) = timeline.future_states.get(&tick) else {
+                    error!("Bad");
+                    panic!("bad!");
                 };
+
+                let mut entity_commands =
+                    commands.spawn(TimelineEventMarker::bundle(
+                        phys,
+                        craft_entity,
+                        event.clone(),
+                        tick,
+                    ));
+
+                // add click handlers if
+                // event is a control event
+                match event {
+                    TimelineEvent::Control(input) => {
+                        let input = input.clone();
+                        configure_marker_observers(
+                            craft_entity,
+                            input,
+                            &mut entity_commands,
+                        );
+                    }
+                    _ => {}
+                }
+                let marker_e = entity_commands.id();
+                alive.insert(marker_e);
+                marker_entity_timeline.insert(tick, marker_e);
+            };
 
             let Some(marker_e) = marker_entity_timeline.get(tick) else {
                 spawn(&mut marker_entity_timeline);
@@ -601,7 +517,7 @@ fn configure_marker_observers(
               mut commands: Commands,
               mut timelines: Query<(
             &Timeline,
-            &mut GenericSparseTimeline<Entity>,
+            &mut EntityTimeline<TimelineEventMarker>,
         )>,
               camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
               mut markers: Query<(
@@ -773,22 +689,4 @@ impl MarkerVisual {
             }
         }
     }
-}
-
-#[derive(Resource, Deref)]
-pub struct ScreenLenToWorld(pub f32);
-
-fn calc_screen_length_to_world(
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    mut screen_length_to_world: ResMut<ScreenLenToWorld>,
-) {
-    let _ = (|| -> Result<(), ViewportConversionError> {
-        let (camera, camera_transform) = camera_q.single();
-        let world_diff = camera
-            .viewport_to_world_2d(camera_transform, Vec2::new(1., 0.))?
-            - camera
-                .viewport_to_world_2d(camera_transform, Vec2::new(0., 0.))?;
-        screen_length_to_world.0 = world_diff.x;
-        Ok(())
-    })();
 }

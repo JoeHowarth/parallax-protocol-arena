@@ -209,11 +209,8 @@ pub enum TimelineEvent {
     Collision(Collision),
 }
 
-use crate::input_handler::GenericSparseTimeline;
-
 /// Stores scheduled inputs and computed future states for an entity
 #[derive(Component, Default, Debug)]
-#[require(GenericSparseTimeline<Entity>)]
 pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
@@ -706,7 +703,9 @@ mod tests {
     fn create_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(ParallaxProtocolArenaPlugin { config: default() })
+            .add_plugins(crate::ParallaxProtocolArenaPlugin {
+                config: default(),
+            })
             .add_plugins(PhysicsSimulationPlugin {
                 schedule: Update,
                 should_keep_alive: false,

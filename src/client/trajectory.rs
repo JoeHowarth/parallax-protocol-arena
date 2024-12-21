@@ -1,10 +1,8 @@
-use std::f32::consts::PI;
-
-use bevy::color::palettes::css;
-use input_handler::ScreenLenToWorld;
-use physics::ControlInput;
-
-use crate::prelude::*;
+use super::ScreenLenToWorld;
+use crate::{
+    physics::{ControlInput, SimulationConfig},
+    prelude::*,
+};
 
 #[derive(Component, Debug)]
 pub struct TrajectorySegment {
@@ -31,6 +29,7 @@ pub struct TrajectoryPreview {
     pub timeline: Timeline,
 }
 
+#[derive(Default, Clone, Copy)]
 pub struct TrajectoryPlugin;
 
 impl Plugin for TrajectoryPlugin {
@@ -39,10 +38,28 @@ impl Plugin for TrajectoryPlugin {
             Update,
             (
                 // update_event_markers,
+                preview_lookahead,
                 (update_trajectory_segments, update_segment_visuals).chain(),
             ),
         );
     }
+}
+
+fn preview_lookahead(
+    colliders: Query<&crate::physics::collisions::Collider>,
+    mut preview: ResMut<TrajectoryPreview>,
+    simulation_config: Res<SimulationConfig>,
+    spatial_index: Res<crate::physics::collisions::SpatialIndex>,
+) {
+    let entity = preview.entity;
+    preview.timeline.lookahead(
+        entity,
+        simulation_config.current_tick,
+        1.0 / simulation_config.ticks_per_second as f32,
+        simulation_config.prediction_ticks,
+        colliders.get(entity).unwrap(),
+        &spatial_index,
+    );
 }
 
 fn update_trajectory_segments(

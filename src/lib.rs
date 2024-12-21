@@ -1,23 +1,23 @@
 #![allow(unused_imports, unused_variables)]
 #![feature(duration_constructors)]
 
+pub mod client;
 pub mod crafts;
-pub mod input_handler;
-// pub mod keyboard_controller;
 pub mod physics;
 pub mod prelude;
 pub mod subsystems;
-pub mod trajectory;
 pub mod utils;
 
 use std::borrow::Cow;
 
 use bevy::ecs::world::Command;
-use input_handler::InputHandlerPlugin;
-use physics::{PhysicsSimulationPlugin, SimulationConfig};
-use trajectory::TrajectoryPlugin;
+use client::ClientPlugin;
 
-use crate::prelude::*;
+use crate::{
+    client::{InputHandlerPlugin, TrajectoryPlugin},
+    physics::{PhysicsSimulationPlugin, SimulationConfig},
+    prelude::*,
+};
 
 pub struct ParallaxProtocolArenaPlugin {
     pub config: SimulationConfig,
@@ -33,12 +33,11 @@ impl Plugin for ParallaxProtocolArenaPlugin {
         );
         app.add_plugins((
             Shape2dPlugin::default(),
-            InputHandlerPlugin,
             PhysicsSimulationPlugin {
                 schedule: FixedUpdate,
                 should_keep_alive: false,
             },
-            TrajectoryPlugin,
+            ClientPlugin::default(),
         ));
     }
 }

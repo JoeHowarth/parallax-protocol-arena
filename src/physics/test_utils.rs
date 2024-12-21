@@ -1,13 +1,15 @@
 use assert_approx_eq::assert_approx_eq;
 use bevy::utils::default;
-use physics::{
-    PhysicsBundle,
-    PhysicsSimulationPlugin,
-    PhysicsState,
-    SimulationConfig,
-};
 
-use crate::prelude::*;
+use crate::{
+    physics::{
+        PhysicsBundle,
+        PhysicsSimulationPlugin,
+        PhysicsState,
+        SimulationConfig,
+    },
+    prelude::*,
+};
 
 /// Standard test configuration for predictable physics simulation
 pub const TEST_CONFIG: SimulationConfig = SimulationConfig {

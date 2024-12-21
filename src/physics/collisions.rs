@@ -1,11 +1,13 @@
 use std::ops::RangeInclusive;
 
 use bevy::color::palettes::css;
-use physics::{PhysicsState, Timeline};
 use rtree_rs::RTree;
-use utils::intersect_ray_aabb;
 
-use crate::prelude::*;
+use crate::{
+    physics::{PhysicsState, Timeline},
+    prelude::*,
+    utils::intersect_ray_aabb,
+};
 
 #[derive(Component, Debug, Clone, Deref, Copy)]
 pub struct Collider(pub BRect);

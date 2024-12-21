@@ -8,9 +8,15 @@ use bevy::{
     utils::{HashMap, HashSet},
 };
 use collisions::{Collider, SpatialIndex};
-use crafts::Faction;
-use parallax_protocol_arena::{physics::*, prelude::*};
-use subsystems::plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin};
+use parallax_protocol_arena::{
+    crafts::Faction,
+    health_despawn,
+    physics::*,
+    prelude::*,
+    subsystems::plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin},
+    ParallaxProtocolArenaPlugin,
+    Selected,
+};
 
 fn main() {
     App::new()
