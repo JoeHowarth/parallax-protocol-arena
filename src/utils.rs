@@ -1,5 +1,7 @@
-pub use bevy::math::Rect as BRect;
-use bevy::prelude::{Vec2, Vec3};
+use std::{f32::consts::FRAC_PI_2, marker::PhantomData};
+
+pub use bevy::math::{Quat, Rect as BRect};
+use bevy::prelude::{Component, Vec2, Vec3};
 
 pub type RRect = rtree_rs::Rect<2, f32>;
 
@@ -67,6 +69,23 @@ impl Vec3Ext for Vec3 {
 
     fn from2(vec2: impl Into<Vec2>) -> Vec3 {
         Vec3::from((vec2.into(), 0.))
+    }
+}
+
+pub trait QuatExt {
+    fn from_rot(rot: f32) -> Quat {
+        Quat::from_rotation_z(rot - FRAC_PI_2)
+    }
+}
+
+impl QuatExt for Quat {}
+
+#[derive(Component)]
+pub struct Marker<C>(PhantomData<C>);
+
+impl<C> Default for Marker<C> {
+    fn default() -> Self {
+        Marker(PhantomData::<C>)
     }
 }
 

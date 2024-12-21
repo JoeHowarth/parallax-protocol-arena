@@ -19,12 +19,12 @@ pub struct TrajectorySegment {
 // Bundle to create a trajectory segment entity
 #[derive(Bundle)]
 struct TrajectorySegmentBundle {
-    sprite_bundle: Sprite,
+    sprite: Sprite,
     transform: Transform,
     segment: TrajectorySegment,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub struct TrajectoryPreview {
     pub entity: Entity,
     pub start_tick: u64,
@@ -162,16 +162,12 @@ fn update_trajectory(
                     (craft_entity, start_tick),
                     commands
                         .spawn((TrajectorySegmentBundle {
-                            sprite_bundle: Sprite {
-                                color: Color::srgba(0.0, 0.0, 0.0, 0.0),
-                                custom_size: Some(Vec2::new(
-                                    length,
-                                    line_width * 5.,
-                                )),
-                                ..default()
-                            },
+                            sprite: Sprite::from_color(
+                                Color::srgba(0.0, 0.0, 0.0, 0.0),
+                                Vec2::new(length, line_width * 5.),
+                            ),
                             transform: Transform::from_translation(
-                                Vec3::from2(center_pos),
+                                center_pos.to3(),
                             )
                             .with_rotation(Quat::from_rotation_z(angle)),
                             segment: TrajectorySegment {
@@ -256,147 +252,5 @@ fn update_segment_visuals(
         };
         sprite.color = Color::srgba(0.5, 1.0, 0.5, alpha);
         // sprite.custom_size.as_mut().unwrap().y = 5.0;
-    }
-}
-
-#[derive(Component)]
-struct TimelineEventMarker {
-    tick: u64,
-    input: TimelineEvent,
-}
-
-#[derive(Bundle)]
-struct TimelineEventMarkerBundle {
-    sprite_bundle: Sprite,
-    transform: Transform,
-    marker: TimelineEventMarker,
-    // pickable: Pickable,
-}
-
-fn update_event_markers(
-    mut commands: Commands,
-    query: Query<(Entity, &Timeline)>,
-    mut markers_query: Query<(
-        Entity,
-        &mut TimelineEventMarker,
-        &mut Transform,
-        &mut Sprite,
-    )>,
-    mut markers_map: Local<HashMap<(Entity, u64), Entity>>,
-    mut gizmos: Gizmos,
-) {
-    let mut used_keys = HashSet::with_capacity(markers_map.len());
-
-    for (timeline_entity, timeline) in query.iter() {
-        for (tick, input) in timeline.events.iter() {
-            let tick = *tick;
-            let input = input.clone();
-
-            let Some(state) = timeline.future_states.get(&tick) else {
-                continue;
-            };
-            let position = state.pos;
-
-            used_keys.insert((timeline_entity, tick));
-
-            let (color, shaft_length, rotation) = match input {
-                TimelineEvent::Control(control_input) => match control_input {
-                    ControlInput::SetThrust(thrust) => {
-                        let magnitude = (thrust.abs() * 50.0).min(50.0);
-                        (
-                            Color::srgba(1.0, 0.0, 0.0, 0.8),
-                            magnitude,
-                            state.rotation,
-                        )
-                    }
-                    ControlInput::SetThrustAndRotation(thrust, rotation) => {
-                        let magnitude = (thrust.abs() * 50.0).min(50.0);
-                        (Color::srgba(1.0, 0.0, 0.0, 0.8), magnitude, rotation)
-                    }
-                    ControlInput::SetRotation(rotation) => {
-                        (Color::srgba(0.0, 1.0, 0.0, 0.8), 20.0, rotation)
-                    }
-                    ControlInput::SetAngVel(ang_vel) => {
-                        let magnitude = (ang_vel.abs() * 8.0).min(20.0);
-                        (
-                            Color::srgba(0.0, 0.0, 1.0, 0.8),
-                            magnitude,
-                            state.rotation,
-                        )
-                    }
-                },
-                TimelineEvent::Collision(ref _collision) => {
-                    (css::DARK_SALMON.into(), 20_f32, state.rotation)
-                }
-            };
-
-            let shaft_width = shaft_length / 6.0;
-            let head_size = shaft_width * 2.0;
-            let dir = Vec2::from_angle(rotation);
-            let shaft_position =
-                position + dir * (shaft_length - head_size) / 2.0;
-
-            // Calculate arrowhead points
-            let head_center = position + dir * (shaft_length - head_size / 2.0);
-            let head_left = head_center
-                + Vec2::from_angle(rotation + PI * 2.0 / 3.0) * head_size;
-            let head_right = head_center
-                + Vec2::from_angle(rotation - PI * 2.0 / 3.0) * head_size;
-
-            // Draw arrowhead with gizmos
-            gizmos.line_2d(head_center, head_left, color);
-            gizmos.line_2d(head_center, head_right, color);
-            gizmos.line_2d(head_left, head_right, color);
-
-            // Either update existing shaft or create new one
-            if let Some(&marker_entity) =
-                markers_map.get(&(timeline_entity, tick))
-            {
-                if let Ok((_entity, mut marker, mut transform, mut sprite)) =
-                    markers_query.get_mut(marker_entity)
-                {
-                    marker.input = input.clone();
-                    transform.translation = Vec3::from2(shaft_position);
-                    transform.rotation = Quat::from_rotation_z(rotation);
-                    sprite.color = color;
-                    sprite.custom_size =
-                        Some(Vec2::new(shaft_length - head_size, shaft_width));
-                }
-            } else {
-                // Create new shaft
-                let marker_entity = commands
-                    .spawn(TimelineEventMarkerBundle {
-                        sprite_bundle: Sprite {
-                            color,
-                            custom_size: Some(Vec2::new(
-                                shaft_length - head_size,
-                                shaft_width,
-                            )),
-                            ..default()
-                        },
-                        transform: Transform::from_translation(Vec3::from2(
-                            shaft_position,
-                        ))
-                        .with_rotation(Quat::from_rotation_z(rotation)),
-                        marker: TimelineEventMarker { tick, input },
-                    })
-                    .id();
-
-                markers_map.insert((timeline_entity, tick), marker_entity);
-            }
-        }
-    }
-
-    // Cleanup unused markers
-    let mut to_delete = Vec::new();
-    for (k, e) in markers_map.iter() {
-        if !used_keys.contains(k) {
-            commands.entity(*e).despawn();
-            to_delete.push(*k);
-        }
-    }
-
-    for k in to_delete {
-        markers_map.remove(&k);
     }
 }

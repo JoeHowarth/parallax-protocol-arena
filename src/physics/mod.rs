@@ -172,6 +172,16 @@ pub struct TimelineEventRequest {
     pub input: ControlInput,
 }
 
+#[derive(Event, Debug)]
+pub struct TimelineEventRemovalRequest {
+    /// Entity to apply to
+    pub entity: Entity,
+    /// Simulation tick when this input takes effect
+    pub tick: u64,
+    /// The control input to remove
+    pub input: ControlInput,
+}
+
 /// Control inputs that can be scheduled to modify entity behavior at specific
 /// ticks
 ///
@@ -199,8 +209,11 @@ pub enum TimelineEvent {
     Collision(Collision),
 }
 
+use crate::input_handler::GenericSparseTimeline;
+
 /// Stores scheduled inputs and computed future states for an entity
-#[derive(Component, Default)]
+#[derive(Component, Default, Debug)]
+#[require(GenericSparseTimeline<Entity>)]
 pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
@@ -248,6 +261,7 @@ impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
     fn build(&self, app: &mut App) {
         let should_keep_alive = self.should_keep_alive;
         app.add_event::<TimelineEventRequest>()
+            .add_event::<TimelineEventRemovalRequest>()
             .insert_resource(SpatialIndex::default())
             .add_systems(
                 self.schedule.clone(),
@@ -288,6 +302,7 @@ fn update_simulation_time(mut sim_time: ResMut<SimulationConfig>) {
 //   2. Set last_computed_tick to invalidate future states
 fn process_timeline_events(
     mut timeline_events: EventReader<TimelineEventRequest>,
+    mut timeline_removals: EventReader<TimelineEventRemovalRequest>,
     mut timelines: Query<&mut Timeline>,
 ) {
     for TimelineEventRequest {
@@ -298,22 +313,41 @@ fn process_timeline_events(
     {
         info!(?tick, ?input, ?entity, "Got timeline event request");
         let Ok(mut timeline) = timelines.get_mut(*entity) else {
-            warn!("Timeline component for given request");
+            warn!("Timeline component missing for given request");
             continue;
         };
-        // just insert with binary search in the future
-        let prev_last_computed_tick = timeline.last_computed_tick;
+
         timeline.last_computed_tick =
             timeline.last_computed_tick.min(*tick - 1);
         timeline
             .events
             .insert(*tick, TimelineEvent::Control(*input));
+    }
 
-        info!(
-            prev_last_computed_tick,
-            last_computed_tick = timeline.last_computed_tick,
-            "processing timeline event"
-        );
+    for TimelineEventRemovalRequest {
+        tick,
+        input,
+        entity,
+    } in timeline_removals.read()
+    {
+        info!(?tick, ?input, ?entity, "Got timeline removal request");
+        let Ok(mut timeline) = timelines.get_mut(*entity) else {
+            warn!("Timeline component missing for given removal");
+            continue;
+        };
+
+        if timeline.events.get(tick) != Some(&TimelineEvent::Control(*input)) {
+            warn!(
+                existing = ?timeline.events.get(tick),
+                request = ?Some(&TimelineEvent::Control(*input)),
+                "Removal request invalid"
+            );
+            continue;
+        };
+
+        timeline.events.remove(tick);
+        timeline.last_computed_tick =
+            timeline.last_computed_tick.min(*tick - 1);
     }
 }
 
@@ -533,10 +567,10 @@ pub struct InteractionLocator {
 }
 
 impl From<(Entity, Entity, u64)> for InteractionLocator {
-    fn from(value: (Entity, Entity, u64)) -> Self {
+    fn from((e1, e2, tick): (Entity, Entity, u64)) -> Self {
         InteractionLocator {
-            entities: [value.0, value.1],
-            tick: value.2,
+            entities: [e1, e2],
+            tick,
         }
     }
 }
@@ -555,7 +589,7 @@ impl Timeline {
         let start_tick = current_tick.max(self.last_computed_tick + 1);
         let mut end_tick = current_tick + prediction_ticks;
         if start_tick > end_tick {
-            info!("start_tick > end_tick, returning early");
+            // info!("start_tick > end_tick, returning early");
             return LookaheadRet {
                 // will cause `is_empty()` to be true
                 updated: start_tick..=end_tick,
@@ -653,7 +687,7 @@ fn sync_physics_state_transform(
         transform.rotation = Quat::from_rotation_z(phys_state.rotation);
         timeline
             .future_states
-            .remove(&(sim_state.current_tick.saturating_sub(1)));
+            .remove(&(sim_state.current_tick.saturating_sub(2)));
         timeline
             .events
             .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));

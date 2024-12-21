@@ -43,7 +43,7 @@ fn main() {
             AsteroidPlugin,
             PlasmaCannonPlugin,
         ))
-        .add_systems(Startup, setup)
+        .add_systems(PostStartup, setup)
         .add_systems(FixedUpdate, health_despawn)
         .add_systems(Update, (exit_system,))
         .run();
@@ -80,6 +80,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .id();
     info!(ship_entity = ship_e.index(), "Ship Entity");
     commands.insert_resource(Selected(ship_e));
+
     // commands.spawn(ship_bundle(
     //     "Ship_rotated.png",
     //     10.,
@@ -88,6 +89,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     //     Vec2::new(-10., -10.),
     //     &asset_server,
     // ));
+    //
     // commands.queue(SmallAsteroid::spawn(
     //     Vec2::new(150., 20.),
     //     Vec2::new(1., -2.),
