@@ -36,7 +36,7 @@ fn main() {
             bevy_pancam::PanCamPlugin,
         ))
         .add_plugins((
-            ParallaxProtocolArenaPlugin::<FixedUpdate> {
+            ParallaxProtocolArenaPlugin {
                 config: (|| {
                     let tps = 30;
                     SimulationConfig {
@@ -46,8 +46,7 @@ fn main() {
                         ..default()
                     }
                 })(),
-                physics: PhysicsSimulationPlugin::<FixedUpdate>::default(),
-                client: Some(ClientPlugin::default()),
+                ..default()
             },
             AsteroidPlugin,
             PlasmaCannonPlugin,

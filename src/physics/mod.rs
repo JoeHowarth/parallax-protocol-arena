@@ -249,39 +249,44 @@ impl Default for SimulationConfig {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub enum PhysicsSchedule {
+    #[default]
+    FixedUpdate,
+    Update,
+}
+
 /// Plugin that sets up the physics simulation systems
-#[derive(Clone, Debug)]
-pub struct PhysicsSimulationPlugin<Label = FixedUpdate> {
-    pub schedule: Label,
+#[derive(Clone, Debug, Default)]
+pub struct PhysicsSimulationPlugin {
+    pub schedule: PhysicsSchedule,
     pub should_keep_alive: bool,
 }
 
-impl Default for PhysicsSimulationPlugin {
-    fn default() -> Self {
-        Self {
-            schedule: FixedUpdate,
-            should_keep_alive: false,
-        }
-    }
-}
-
-impl<Label: ScheduleLabel + Clone> Plugin for PhysicsSimulationPlugin<Label> {
+impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
         let should_keep_alive = self.should_keep_alive;
         app.add_event::<TimelineEventRequest>()
             .add_event::<TimelineEventRemovalRequest>()
             .insert_resource(SpatialIndex::default())
-            .add_systems(
-                self.schedule.clone(),
-                (
-                    update_simulation_time,
-                    compute_future_states,
-                    sync_physics_state_transform,
-                    despawn_not_alive.run_if(move || !should_keep_alive),
-                )
-                    .chain(),
-            )
             .add_systems(Update, (viz_colliders, process_timeline_events));
+
+        let systems = (
+            update_simulation_time,
+            compute_future_states,
+            sync_physics_state_transform,
+            despawn_not_alive.run_if(move || !should_keep_alive),
+        );
+        let systems = systems.chain();
+
+        match self.schedule {
+            PhysicsSchedule::FixedUpdate => {
+                app.add_systems(FixedUpdate, systems);
+            }
+            PhysicsSchedule::Update => {
+                app.add_systems(Update, systems);
+            }
+        }
     }
 }
 
@@ -439,7 +444,7 @@ fn sync_physics_state_transform(
     }
 }
 
-#[cfg(bar)]
+#[cfg(test)]
 mod tests {
     use std::{f32::consts::PI, time::Duration};
 
@@ -454,7 +459,7 @@ mod tests {
             crate::ParallaxProtocolArenaPlugin {
                 config: default(),
                 physics: PhysicsSimulationPlugin {
-                    schedule: Update,
+                    schedule: PhysicsSchedule::Update,
                     should_keep_alive: false,
                 },
                 client: None,
@@ -474,285 +479,6 @@ mod tests {
             max_thrust: 100.0,
             alive: true,
         }
-    }
-
-    #[test]
-    fn test_resolve_collision_remove() {
-        let tick = 2;
-        let mut spatial_index = SpatialIndex::default();
-        let col = Collider::from_dim(Vec2::new(2., 2.));
-
-        // Set up b - simplified with builder
-        let b = Entity::from_raw(1);
-        let b_st = TestStateBuilder::new().pos(20., 0.).mass(1.).build();
-        let mut b_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let b_ret = b_tl.lookahead(b, 1, 1., 1, &col, &spatial_index);
-        dbg!(&b_ret);
-        assert_eq!(b_ret.updated, 1..=2);
-        assert_eq!(b_ret.interaction, None);
-        let b_st_t = b_tl.future_states.get(&tick).unwrap();
-        assert_eq!(b_st_t, &PhysicsState { ..b_st });
-        assert_eq!(b_tl.events.len(), 0);
-        spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
-
-        // Set up a - simplified with builder
-        let a = Entity::from_raw(0);
-        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
-        let mut a_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let a_ret = a_tl.lookahead(a, 1, 1., 1, &col, &spatial_index);
-        dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=2);
-        assert_eq!(a_ret.interaction, Some((a, b, tick).into()));
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(20., 0.),
-                ..a_st
-            }
-        );
-        assert_eq!(a_tl.events.len(), 0);
-        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
-
-        // We expect a collision at tick t where b is destroyed and a's velocity
-        // is reduced
-        resolve_collisions(
-            tick,
-            (a, &col, &mut a_tl),
-            (b, &col, &mut b_tl),
-            1.,
-            &mut spatial_index,
-        );
-        assert_eq!(a_tl.events.len(), 1);
-        assert_eq!(b_tl.events.len(), 1);
-
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        let b_st_t = b_tl.future_states.get(&tick).unwrap();
-        dbg!(&a_st_t, &b_st_t);
-        assert_eq!(
-            b_st_t,
-            &PhysicsState {
-                alive: false,
-                ..b_st
-            }
-        );
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(20., 0.),
-                vel: Vec2::new(9., 0.),
-                alive: true,
-                ..a_st
-            }
-        );
-
-        // Simulate a user input to avoid the collision at the previous tick
-        a_tl.events.insert(
-            1,
-            // cancel 10 vel/tick
-            TimelineEvent::Control(ControlInput::SetThrustAndRotation(0.9, PI)),
-        );
-        a_tl.last_computed_tick = 0;
-
-        // Re-run lookahead
-        // We expect it to find the old, invalid collision event and eject
-        let a_ret = a_tl.lookahead(a, 1, 1., 1, &col, &spatial_index);
-        dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=tick);
-        assert_eq!(a_ret.interaction, Some((a, b, tick).into()));
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        assert_eq!(a_st_t.pos.x, 10.);
-        assert_eq!(a_st_t.vel.x, -10.);
-        assert_eq!(a_st_t.alive, true);
-        assert_eq!(a_tl.events.len(), 2);
-        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
-
-        // We expect to not collide
-        // a and b should have the collision events removed
-        resolve_collisions(
-            tick,
-            (a, &col, &mut a_tl),
-            (b, &col, &mut b_tl),
-            1.,
-            &mut spatial_index,
-        );
-
-        dbg!(&a_tl.events, &b_tl.events);
-
-        assert_eq!(a_tl.events.len(), 1);
-        assert_eq!(b_tl.events.len(), 0);
-
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        let b_st_t = b_tl.future_states.get(&tick).unwrap();
-        dbg!(&a_st_t, &b_st_t);
-        assert_eq!(b_st_t, &PhysicsState { ..b_st });
-        assert_eq!(a_st_t.pos.x, 10.);
-        assert_eq!(a_st_t.vel.x, -10.);
-        assert_eq!(a_st_t.alive, true);
-    }
-
-    #[test]
-    fn test_resolve_collision_new() {
-        let tick = 1;
-        let mut spatial_index = SpatialIndex::default();
-        let col = Collider::from_dim(Vec2::new(2., 2.));
-
-        // Set up b - simplified with builder
-        let b = Entity::from_raw(1);
-        let b_st = TestStateBuilder::new().pos(10., 0.).mass(1.).build();
-        let mut b_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, b_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        // spatial_index.insert(tick, &col, SpatialItem::from_state(b, &b_st));
-        let b_ret = b_tl.lookahead(b, 1, 1., 0, &col, &spatial_index);
-        dbg!(&b_ret);
-        assert_eq!(b_ret.updated, 1..=1);
-        assert_eq!(b_ret.interaction, None);
-        let b_st_t = b_tl.future_states.get(&tick).unwrap();
-        assert_eq!(b_st_t, &PhysicsState { ..b_st });
-        assert_eq!(b_tl.events.len(), 0);
-        spatial_index.patch(b, &b_tl, &col, b_ret.updated, b_ret.removed);
-
-        // Set up a - simplified with builder
-        let a = Entity::from_raw(0);
-        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
-        let mut a_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
-        dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, Some((a, b, 1).into()));
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(10., 0.),
-                ..a_st
-            }
-        );
-        assert_eq!(a_tl.events.len(), 0);
-        spatial_index.patch(a, &a_tl, &col, a_ret.updated, a_ret.removed);
-
-        resolve_collisions(
-            tick,
-            (a, &col, &mut a_tl),
-            (b, &col, &mut b_tl),
-            1.,
-            &mut spatial_index,
-        );
-        assert_eq!(a_tl.events.len(), 1);
-        assert_eq!(b_tl.events.len(), 1);
-
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        let b_st_t = b_tl.future_states.get(&tick).unwrap();
-        dbg!(&a_st_t, &b_st_t);
-        assert_eq!(
-            b_st_t,
-            &PhysicsState {
-                alive: false,
-                ..b_st
-            }
-        );
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(10., 0.),
-                vel: Vec2::new(9., 0.),
-                alive: true,
-                ..a_st
-            }
-        );
-    }
-
-    #[test]
-    fn test_lookahead_collision() {
-        let tick = 1;
-        let mut spatial_index = SpatialIndex::default();
-        let col = Collider::from_dim(Vec2::new(2., 2.));
-        let b = Entity::from_raw(1);
-        let b_spatial_item = SpatialItem {
-            entity: b,
-            pos: Vec2::new(10., 0.),
-            vel: Vec2::new(0., 0.),
-            mass: 1.,
-        };
-        spatial_index.insert(tick, &col, b_spatial_item.clone());
-
-        let a = Entity::from_raw(0);
-        let a_st = TestStateBuilder::new().vel(10., 0.).mass(9.).build();
-
-        let mut a_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
-
-        dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, Some((a, b, 1).into()));
-
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(10., 0.),
-                ..a_st
-            }
-        )
-    }
-
-    #[test]
-    fn test_lookahead_no_collision() {
-        let tick = 1;
-        let spatial_index = SpatialIndex::default();
-        let col = Collider::from_dim(Vec2::new(2., 2.));
-        let b = Entity::from_raw(1);
-        let b_spatial_item = SpatialItem {
-            entity: b,
-            pos: Vec2::new(20., 0.),
-            vel: Vec2::new(0., 0.),
-            mass: 1.,
-        };
-        // spatial_index.insert(tick, &col, b_spatial_item.clone());
-
-        let a = Entity::from_raw(0);
-        let mut a_st = create_test_physics_state();
-        a_st.vel.x = 10.;
-        a_st.mass = 9.;
-
-        let mut a_tl = Timeline {
-            future_states: BTreeMap::from_iter([(0, a_st.clone())].into_iter()),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let a_ret = a_tl.lookahead(a, 1, 1., 0, &col, &spatial_index);
-
-        dbg!(&a_ret);
-        assert_eq!(a_ret.updated, 1..=1);
-        assert_eq!(a_ret.interaction, None);
-
-        let a_st_t = a_tl.future_states.get(&tick).unwrap();
-        assert_eq!(
-            a_st_t,
-            &PhysicsState {
-                pos: Vec2::new(10., 0.),
-                ..a_st
-            }
-        )
     }
 
     #[test]
@@ -840,147 +566,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lookahead() {
-        let mut prev_state = create_test_physics_state();
-        prev_state.vel.x = 10.;
-
-        let mut timeline = Timeline {
-            future_states: BTreeMap::from_iter(
-                [(0, prev_state.clone())].into_iter(),
-            ),
-            events: BTreeMap::default(),
-            last_computed_tick: 0,
-        };
-        let entity = Entity::from_raw(5);
-        let current_tick = 1;
-        let seconds_per_tick = 1.;
-        let collider = Collider::from_wh(2., 2.);
-        let spatial_index = SpatialIndex::default();
-
-        let ret = timeline.lookahead(
-            entity,
-            current_tick,
-            seconds_per_tick,
-            120,
-            &collider,
-            &spatial_index,
-        );
-
-        let next_state = timeline.future_states.get(&(current_tick)).unwrap();
-        let expected = PhysicsState {
-            pos: Vec2::new(10., 0.),
-            ..prev_state
-        };
-        assert_eq!(next_state, &expected);
-    }
-
-    #[test]
-    fn test_compute_future_states_system_with_collision() {
-        let mut app = create_test_app();
-        app.world_mut()
-            .resource_mut::<SimulationConfig>()
-            .prediction_ticks = 2;
-        app.world_mut()
-            .resource_mut::<SimulationConfig>()
-            .ticks_per_second = 1;
-
-        // Spawn an entity with physics components
-        let mut b_st = create_test_physics_state();
-        b_st.pos.x = 30.;
-        b_st.mass = 1.;
-        let dim = Vec2::splat(2.);
-
-        let b = app
-            .world_mut()
-            .spawn(PhysicsBundle::from_state(b_st.clone(), dim))
-            .id();
-
-        let mut a_st = create_test_physics_state();
-        a_st.vel.x = 10.;
-        a_st.mass = 9.;
-        let a = app
-            .world_mut()
-            .spawn(PhysicsBundle::from_state(a_st.clone(), dim))
-            .id();
-
-        // Run the system once
-        app.update();
-        {
-            let world = app.world();
-
-            // Get the resulting timeline component
-            let a_tl = world
-                .entity(a)
-                .get::<Timeline>()
-                .expect("Timeline component should exist");
-
-            dbg!(&a_tl.events);
-
-            let b_tl = world
-                .entity(b)
-                .get::<Timeline>()
-                .expect("Timeline component should exist");
-
-            dbg!(&b_tl.events);
-            assert_eq!(b_tl.events, a_tl.events);
-            assert_eq!(b_tl.future_states.get(&3).unwrap().alive, false);
-            assert_eq!(a_tl.future_states.get(&3).unwrap().alive, true);
-            assert_eq!(
-                a_tl.future_states.get(&3).unwrap().pos,
-                Vec2::new(30., 0.)
-            );
-        }
-
-        eprintln!(
-            "\n==========================\nNow we add a control input that \
-             avoids the collision\n==========================="
-        );
-        {
-            let world = app.world_mut();
-            let mut a = world.entity_mut(a);
-            let mut a_tl = a.get_mut::<Timeline>().unwrap();
-            a_tl.events.insert(
-                2,
-                TimelineEvent::Control(ControlInput::SetThrustAndRotation(
-                    0.9, PI,
-                )),
-            );
-            a_tl.last_computed_tick = 1;
-        }
-        app.update();
-
-        {
-            let world = app.world();
-
-            // Get the resulting timeline component
-            let a_tl = world
-                .entity(a)
-                .get::<Timeline>()
-                .expect("Timeline component should exist");
-
-            dbg!(&a_tl.events);
-
-            let b_tl = world
-                .entity(b)
-                .get::<Timeline>()
-                .expect("Timeline component should exist");
-
-            dbg!(&b_tl.events);
-            assert_eq!(a_tl.events.len(), 1);
-            assert_eq!(
-                a_tl.events.get(&2),
-                Some(&TimelineEvent::Control(
-                    ControlInput::SetThrustAndRotation(0.9, PI,)
-                ))
-            );
-            assert_eq!(b_tl.future_states.get(&3).unwrap().alive, true);
-            assert_eq!(a_tl.future_states.get(&3).unwrap().alive, true);
-            assert_approx_eq!(a_tl.future_states.get(&3).unwrap().pos.x, 20.);
-            assert_approx_eq!(a_tl.future_states.get(&3).unwrap().pos.y, 0.);
-        }
-    }
-
-    #[test]
     fn test_compute_future_states_system() {
         let mut app = create_test_app();
 
@@ -992,8 +577,8 @@ mod tests {
             .spawn(PhysicsBundle::new_with_events(
                 state,
                 Vec2::splat(2.),
-                [(30, TimelineEvent::Control(ControlInput::SetThrust(1.0)))]
-                    .into_iter(),
+                0,
+                [(30, ControlInput::SetThrust(1.0))],
             ))
             .id();
 
@@ -1035,99 +620,5 @@ mod tests {
         let next_state = state.integrate(1.0 / 60.0);
         assert!(next_state.vel.x.abs() < f32::EPSILON);
         assert!(next_state.vel.y > 0.0);
-    }
-
-    #[test]
-    fn test_timeline_event_processing_required_components() {
-        let mut app = create_test_app();
-        bevy::log::tracing_subscriber::fmt::init();
-
-        // Set up entity with multiple control inputs
-        let entity = app
-            .world_mut()
-            .spawn(PhysicsBundle::from_state(
-                create_test_physics_state(),
-                Vec2::splat(2.),
-            ))
-            .id();
-
-        app.world_mut().send_event(TimelineEventRequest {
-            entity,
-            tick: 10,
-            input: ControlInput::SetThrust(1.0),
-        });
-        app.world_mut().send_event(TimelineEventRequest {
-            entity,
-            tick: 20,
-            input: ControlInput::SetRotation(std::f32::consts::FRAC_PI_2),
-        });
-
-        app.update();
-
-        let timeline = app
-            .world()
-            .entity(entity)
-            .get::<Timeline>()
-            .expect("Timeline component should exist");
-
-        // Check state at tick 15 (after thrust, before rotation)
-        let mid_state = timeline
-            .future_states
-            .get(&15)
-            .expect("Should have state after thrust application");
-        assert!(mid_state.vel.x > 0.0);
-
-        // Check state at tick 25 (after both events)
-        let final_state = timeline
-            .future_states
-            .get(&25)
-            .expect("Should have state after rotation");
-        assert_eq!(final_state.rotation, std::f32::consts::FRAC_PI_2);
-    }
-
-    #[test]
-    fn test_timeline_event_processing() {
-        let mut app = create_test_app();
-
-        // Set up entity with multiple control inputs
-        let state = create_test_physics_state();
-        let entity = app
-            .world_mut()
-            .spawn(PhysicsBundle::new_with_events(
-                state,
-                Vec2::splat(2.),
-                [
-                    (10, TimelineEvent::Control(ControlInput::SetThrust(1.0))),
-                    (
-                        20,
-                        TimelineEvent::Control(ControlInput::SetRotation(
-                            std::f32::consts::FRAC_PI_2,
-                        )),
-                    ),
-                ],
-            ))
-            .id();
-
-        app.update();
-
-        let timeline = app
-            .world()
-            .entity(entity)
-            .get::<Timeline>()
-            .expect("Timeline component should exist");
-
-        // Check state at tick 15 (after thrust, before rotation)
-        let mid_state = timeline
-            .future_states
-            .get(&15)
-            .expect("Should have state after thrust application");
-        assert!(mid_state.vel.x > 0.0);
-
-        // Check state at tick 25 (after both events)
-        let final_state = timeline
-            .future_states
-            .get(&25)
-            .expect("Should have state after rotation");
-        assert_eq!(final_state.rotation, std::f32::consts::FRAC_PI_2);
     }
 }
