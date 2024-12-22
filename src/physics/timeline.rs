@@ -3,7 +3,7 @@ use crate::prelude::*;
 
 /// Stores scheduled inputs and computed future states for an entity
 #[derive(Component, Default, Debug, Clone)]
-struct Timeline {
+pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
     /// Ordered list of future control inputs
@@ -30,10 +30,24 @@ impl Timeline {
         self.input_events.insert(tick, event);
         self.last_computed_tick = self.last_computed_tick.min(tick - 1);
     }
+
+    pub fn remove_input_event(
+        &mut self,
+        tick: u64,
+        event: ControlInput,
+    ) -> bool {
+        let existing = self.input_events.get(&tick);
+        if existing != Some(&event) {
+            return false;
+        }
+        self.input_events.remove(&tick);
+        self.last_computed_tick = self.last_computed_tick.min(tick - 1);
+        true
+    }
 }
 
-fn compute_future_states_2(
-    mut sim_config: ResMut<SimulationConfig>,
+pub fn compute_future_states(
+    sim_config: Res<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, &Collider, &mut Timeline)>,
 ) {
@@ -82,72 +96,110 @@ fn compute_future_states_2(
                 panic!("whoops");
             };
 
-            // clear sim events since these should be regenerated
-            timeline.sim_events.remove(&tick);
-
-            let mut state = timeline
-                .state_mut(tick - 1)
-                .expect(
-                    "Previous tick's state must exist bc of last_updated_sets \
-                     invariant",
-                )
-                .clone();
-
-            let event = timeline.input_events.get(&tick);
-
-            // - apply control input events
-            state.apply_input_event(event);
-
-            // - integrate physics
-            state = state.integrate(seconds_per_tick);
-
-            spatial_index.insert(
+            apply_inputs_and_integrte_phys(
                 tick,
-                collider,
-                SpatialItem::from_state(entity, &state),
-            );
-            timeline.future_states.insert(tick, state);
-            timeline.last_computed_tick = tick;
-        }
-
-        // gather collision pairs
-        let mut collisions: HashSet<InteractionGroup> = default();
-        for &entity in &invalid_set {
-            let (_, collider, timeline) = query.get(entity).unwrap();
-            let state = timeline.state(tick).expect("Just added");
-
-            if let Some(collision) =
-                spatial_index.collides(entity, tick, state.pos, collider)
-            {
-                collisions.insert((collision.1.entity, entity).into());
-            };
-        }
-
-        // resolve broad-phase collisions
-        for group in collisions {
-            let [mut a, mut b] = match query.get_many_mut(group.0) {
-                Ok(x) => x,
-                Err(e) => {
-                    eprintln!("{e:?}");
-                    panic!("whoops");
-                }
-            };
-
-            resolve_collisions(
-                tick,
-                (a.0, a.1, &mut a.2),
-                (b.0, b.1, &mut b.2),
                 seconds_per_tick,
-                &mut spatial_index,
+                entity,
+                &mut timeline,
+                collider,
+                Some(&mut spatial_index),
             );
-
-            // all collision participants are invalidated
-            invalid_set.extend(group.0);
         }
+
+        resolve_collisions(
+            tick,
+            &mut invalid_set,
+            &sim_config,
+            &mut spatial_index,
+            &mut query,
+            seconds_per_tick,
+        );
     }
 }
 
+pub fn apply_inputs_and_integrte_phys(
+    tick: u64,
+    seconds_per_tick: f32,
+    entity: Entity,
+    timeline: &mut Timeline,
+    collider: &Collider,
+    spatial_index: Option<&mut SpatialIndex>,
+) {
+    // clear sim events since these should be regenerated
+    timeline.sim_events.remove(&tick);
+
+    let mut state = timeline
+        .state_mut(tick - 1)
+        .expect(
+            "Previous tick's state must exist bc of last_updated_sets \
+             invariant",
+        )
+        .clone();
+
+    let event = timeline.input_events.get(&tick);
+
+    // - apply control input events
+    state.apply_input_event(event);
+
+    // - integrate physics
+    state = state.integrate(seconds_per_tick);
+
+    if let Some(spatial_index) = spatial_index {
+        spatial_index.insert(
+            tick,
+            collider,
+            SpatialItem::from_state(entity, &state),
+        );
+    }
+    timeline.future_states.insert(tick, state);
+    timeline.last_computed_tick = tick;
+}
+
 fn resolve_collisions(
+    tick: u64,
+    invalid_set: &mut EntityHashSet,
+    sim_config: &SimulationConfig,
+    spatial_index: &mut SpatialIndex,
+    query: &mut Query<(Entity, &Collider, &mut Timeline)>,
+    seconds_per_tick: f32,
+) {
+    // gather collision pairs
+    let mut collisions: HashSet<InteractionGroup> = default();
+    for &entity in invalid_set.iter() {
+        let (_, collider, timeline) = query.get(entity).unwrap();
+        let state = timeline.state(tick).expect("Just added");
+
+        if let Some(collision) =
+            spatial_index.collides(entity, tick, state.pos, collider)
+        {
+            collisions.insert((collision.1.entity, entity).into());
+        };
+    }
+
+    // resolve broad-phase collisions
+    for group in collisions {
+        let [mut a, mut b] = match query.get_many_mut(group.0) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("{e:?}");
+                panic!("whoops");
+            }
+        };
+
+        resolve_collision(
+            tick,
+            (a.0, a.1, &mut a.2),
+            (b.0, b.1, &mut b.2),
+            seconds_per_tick,
+            spatial_index,
+        );
+
+        // all collision participants are invalidated
+        invalid_set.extend(group.0);
+    }
+}
+
+fn resolve_collision(
     tick: u64,
     (a_e, a_col, a_tl): (Entity, &Collider, &mut Timeline),
     (b_e, b_col, b_tl): (Entity, &Collider, &mut Timeline),
@@ -208,40 +260,6 @@ mod tests {
     use super::{test_utils::*, *};
     use crate::states_eq;
 
-    #[derive(Bundle)]
-    struct PhysicsBundle {
-        pub state: PhysicsState,
-        pub timeline: Timeline,
-        pub collider: Collider,
-    }
-
-    impl PhysicsBundle {
-        fn from_state(state: PhysicsState, dim: Vec2) -> PhysicsBundle {
-            let collider = Collider(BRect::from_corners(-dim / 2., dim / 2.));
-            PhysicsBundle {
-                state,
-                timeline: Timeline::default(),
-                collider,
-            }
-        }
-
-        fn new_with_events(
-            state: PhysicsState,
-            dim: Vec2,
-            state_tick: u64,
-            events: impl IntoIterator<Item = (u64, ControlInput)>,
-        ) -> PhysicsBundle {
-            let mut bundle = PhysicsBundle::from_state(state, dim);
-            bundle.timeline.input_events.extend(events);
-            bundle
-                .timeline
-                .future_states
-                .insert(state_tick, bundle.state.clone());
-            bundle.timeline.last_computed_tick = state_tick;
-            bundle
-        }
-    }
-
     fn spawn_entity_with_states(
         world: &mut World,
         dim: Vec2,
@@ -293,7 +311,7 @@ mod tests {
                 prediction_ticks: 3,
                 ..TEST_CONFIG
             })
-            .add_systems(Update, compute_future_states_2);
+            .add_systems(Update, compute_future_states);
 
         let dim = Vec2::splat(2.);
 
@@ -339,7 +357,7 @@ mod tests {
                 prediction_ticks: 4,
                 ..TEST_CONFIG
             })
-            .add_systems(Update, compute_future_states_2);
+            .add_systems(Update, compute_future_states);
 
         let dim = Vec2::splat(2.);
 
@@ -392,7 +410,7 @@ mod tests {
                 current_tick: 1,
                 ..TEST_CONFIG
             })
-            .add_systems(Update, compute_future_states_2);
+            .add_systems(Update, compute_future_states);
 
         let dim = Vec2::splat(2.);
 

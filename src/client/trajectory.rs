@@ -1,6 +1,10 @@
 use super::ScreenLenToWorld;
 use crate::{
-    physics::{ControlInput, SimulationConfig},
+    physics::{
+        timeline::apply_inputs_and_integrte_phys,
+        ControlInput,
+        SimulationConfig,
+    },
     prelude::*,
 };
 
@@ -52,14 +56,29 @@ fn preview_lookahead(
     spatial_index: Res<crate::physics::collisions::SpatialIndex>,
 ) {
     let entity = preview.entity;
-    preview.timeline.lookahead(
-        entity,
-        simulation_config.current_tick,
-        1.0 / simulation_config.ticks_per_second as f32,
-        simulation_config.prediction_ticks,
-        colliders.get(entity).unwrap(),
-        &spatial_index,
+    let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
+    let collider = colliders.get(preview.entity).unwrap();
+
+    let timeline = &mut preview.timeline;
+
+    let start_tick = timeline.last_computed_tick + 1;
+    assert!(
+        start_tick >= simulation_config.current_tick,
+        "Expected last_computed_tick + 1 >= current_tick"
     );
+    let end_tick =
+        simulation_config.current_tick + simulation_config.prediction_ticks;
+
+    for tick in start_tick..=end_tick {
+        apply_inputs_and_integrte_phys(
+            tick,
+            seconds_per_tick,
+            entity,
+            timeline,
+            collider,
+            None,
+        );
+    }
 }
 
 fn update_trajectory_segments(

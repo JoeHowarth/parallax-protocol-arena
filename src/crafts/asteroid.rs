@@ -9,11 +9,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    physics::{PhysicsBundle, PhysicsState},
+    physics::{PhysicsBundle, PhysicsState, SimulationConfig},
     prelude::*,
 };
 
-// Resource to hold sprite sheet data
+/// Holds sprite sheet data
 #[derive(Resource)]
 pub struct AsteroidAssets {
     texture: Handle<Image>,
@@ -30,6 +30,7 @@ pub struct SmallAsteroid;
 
 impl SmallAsteroid {
     pub fn bundle(
+        tick: u64,
         assets: &AsteroidAssets,
         position: Vec2,
         velocity: Vec2,
@@ -46,6 +47,7 @@ impl SmallAsteroid {
             Transform::from_scale(Vec3::new(1., 1., 1.))
                 .with_translation(position.to3()),
             PhysicsBundle::from_state(
+                tick,
                 PhysicsState {
                     pos: position,
                     vel: velocity,
@@ -61,7 +63,8 @@ impl SmallAsteroid {
     pub fn spawn(position: Vec2, velocity: Vec2) -> impl Command {
         move |world: &mut World| {
             let assets = world.resource::<AsteroidAssets>();
-            world.spawn(Self::bundle(assets, position, velocity));
+            let tick = world.resource::<SimulationConfig>().current_tick;
+            world.spawn(Self::bundle(tick, assets, position, velocity));
         }
     }
 }
@@ -76,8 +79,6 @@ impl Plugin for AsteroidPlugin {
         app.register_type::<AsteroidSpriteLayout>();
         app.register_type::<Asteroid>();
         app.add_systems(Startup, setup);
-        // Add your asteroid spawning system where needed
-        // app.add_systems(Update, spawn_asteroid);
     }
 }
 

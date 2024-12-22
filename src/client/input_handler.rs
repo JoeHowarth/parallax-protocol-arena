@@ -189,8 +189,8 @@ fn handle_engine_input(
             entity: seg.craft_entity,
             start_tick: seg.start_tick,
             timeline: Timeline {
-                events: timeline.events.clone(),
-
+                input_events: timeline.input_events.clone(),
+                sim_events: default(),
                 future_states: BTreeMap::from_iter(
                     timeline
                         .future_states
@@ -223,14 +223,13 @@ fn handle_engine_input(
         world_drag.y *= -1.;
 
         // Patch preview timeline
-        preview.timeline.events.insert(
+        preview.timeline.add_input_event(
             seg.end_tick,
-            TimelineEvent::Control(ControlInput::SetThrustAndRotation(
+            ControlInput::SetThrustAndRotation(
                 (world_drag.length() / 50.).min(1.),
                 world_drag.to_angle(),
-            )),
+            ),
         );
-        preview.timeline.last_computed_tick = preview.start_tick - 1;
         info!("drag loop over");
     }
 

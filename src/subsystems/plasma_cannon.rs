@@ -30,10 +30,11 @@ pub struct FirePlasmaCannon(pub Entity);
 struct PlasmaBurst;
 
 impl PlasmaBurst {
-    pub fn bundle(shooter: &PhysicsState) -> impl Bundle {
+    pub fn bundle(tick: u64, shooter: &PhysicsState) -> impl Bundle {
         (
             PlasmaBurst,
             PhysicsBundle::new_basic(
+                tick,
                 shooter.pos + 20. * shooter.dir(),
                 // add an impulse in the forwards direction to account for
                 // firing the burst
@@ -63,7 +64,7 @@ fn fire(
         };
         if cannon.ready_tick <= sim_config.current_tick {
             info!(shooter = shooter.index(), "Firing PlasmaCannon");
-            commands.spawn(PlasmaBurst::bundle(phys));
+            commands.spawn(PlasmaBurst::bundle(sim_config.current_tick, phys));
             // add 5 second cooldown for firing
             cannon.ready_tick =
                 sim_config.current_tick + sim_config.ticks_per_second * 2;

@@ -17,7 +17,7 @@ pub struct EventMarkerPlugin;
 pub struct TimelineEventMarker {
     tick: u64,
     craft: Entity,
-    input: TimelineEvent,
+    input: ControlInput,
     pos: Vec2,
     rot: f32,
 }
@@ -60,7 +60,7 @@ impl TimelineEventMarker {
     pub fn bundle(
         phys: &PhysicsState,
         craft: Entity,
-        input: TimelineEvent,
+        input: ControlInput,
         tick: u64,
     ) -> impl Bundle {
         (
@@ -95,7 +95,7 @@ fn sync_timeline_markers(
     for (craft_entity, timeline, mut marker_entity_timeline) in
         timelines.iter_mut()
     {
-        for (&tick, event) in timeline.events.iter() {
+        for (&tick, input) in timeline.input_events.iter() {
             let mut spawn =
                 |marker_entity_timeline: &mut MarkerEntityTimeline| {
                     let Some(phys) = timeline.future_states.get(&tick) else {
@@ -107,23 +107,17 @@ fn sync_timeline_markers(
                         commands.spawn(TimelineEventMarker::bundle(
                             phys,
                             craft_entity,
-                            event.clone(),
+                            input.clone(),
                             tick,
                         ));
 
                     // add click handlers if
                     // event is a control event
-                    match event {
-                        TimelineEvent::Control(input) => {
-                            let input = input.clone();
-                            configure_marker_observers(
-                                craft_entity,
-                                input,
-                                &mut entity_commands,
-                            );
-                        }
-                        _ => {}
-                    }
+                    configure_marker_observers(
+                        craft_entity,
+                        input.clone(),
+                        &mut entity_commands,
+                    );
                     let marker_e = entity_commands.id();
                     alive.insert(marker_e);
                     marker_entity_timeline.insert(tick, marker_e);
@@ -144,8 +138,8 @@ fn sync_timeline_markers(
                 error!("Bad");
                 panic!("bad!");
             };
-            if marker.input != *event {
-                marker.input = event.clone();
+            if marker.input != *input {
+                marker.input = input.clone();
                 marker.pos = phys.pos;
                 marker.rot = phys.rotation;
             }
@@ -208,7 +202,8 @@ fn configure_marker_observers(
                 entity: craft_entity,
                 start_tick: last_computed_tick,
                 timeline: Timeline {
-                    events: timeline.events.clone(),
+                    input_events: timeline.input_events.clone(),
+                    sim_events: default(),
                     future_states: BTreeMap::from_iter(
                         timeline
                             .future_states
@@ -256,10 +251,10 @@ fn configure_marker_observers(
                     },
                 );
 
-            preview.timeline.events.remove(&old_tick);
+            preview.timeline.input_events.remove(&old_tick);
             preview
                 .timeline
-                .events
+                .input_events
                 .insert(new_tick, marker.input.clone());
 
             // preview.timeline.lookahead(
@@ -384,25 +379,25 @@ impl MarkerVisual {
         use MarkerVisual::*;
         use TimelineEvent::*;
         match &event.input {
-            Control(SetThrust(thrust)) => Arrow {
+            SetThrust(thrust) => Arrow {
                 length: *thrust,
                 relative_rot: 0.,
                 color: css::PALE_GREEN,
             },
-            Control(SetRotation(new_rot)) => ArcArrow {
+            SetRotation(new_rot) => ArcArrow {
                 sweep: (new_rot - event.rot) % (2. * PI),
                 color: css::DARK_BLUE,
             },
-            Control(SetAngVel(ang_vel)) => ArcArrow {
+            SetAngVel(ang_vel) => ArcArrow {
                 sweep: (ang_vel - event.rot) % (2. * PI),
                 color: css::MIDNIGHT_BLUE,
             },
-            Control(SetThrustAndRotation(thrust, new_rot)) => Arrow {
+            SetThrustAndRotation(thrust, new_rot) => Arrow {
                 length: *thrust,
                 relative_rot: new_rot - event.rot,
                 color: css::LIGHT_GREEN,
             },
-            Collision(collision) => Cross { color: css::RED },
+            // Collision(collision) => Cross { color: css::RED },
         }
     }
 

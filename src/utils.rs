@@ -1,7 +1,14 @@
 use std::{f32::consts::FRAC_PI_2, marker::PhantomData};
 
 pub use bevy::math::{Quat, Rect as BRect};
-use bevy::prelude::{Component, Vec2, Vec3};
+use bevy::{
+    ecs::{
+        entity::EntityHashMap,
+        query::{QueryData, QueryFilter, ROQueryItem, WorldQuery},
+    },
+    prelude::{Component, Entity, Vec2, Vec3},
+    utils::HashMap,
+};
 
 pub type RRect = rtree_rs::Rect<2, f32>;
 

@@ -1,5 +1,5 @@
 #![allow(unused_imports, unused_variables)]
-#![feature(duration_constructors)]
+#![feature(duration_constructors, associated_type_defaults)]
 
 pub mod client;
 pub mod crafts;

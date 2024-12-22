@@ -85,6 +85,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             Faction::Red,
             Vec2::new(10., 10.),
             &asset_server,
+            0,
         ))
         .id();
     info!(ship_entity = ship_e.index(), "Ship Entity");
@@ -117,6 +118,7 @@ pub fn ship_bundle(
     faction: Faction,
     pos: Vec2,
     asset_server: &AssetServer,
+    tick: u64,
 ) -> impl Bundle {
     (
         faction,
@@ -143,13 +145,14 @@ pub fn ship_bundle(
                 alive: true,
             },
             Vec2::new(px, px),
+            tick,
             [
-                (2, TimelineEvent::Control(ControlInput::SetThrust(1.))),
-                (20, TimelineEvent::Control(ControlInput::SetThrust(0.))),
-                (60, TimelineEvent::Control(ControlInput::SetRotation(PI))),
-                (61, TimelineEvent::Control(ControlInput::SetAngVel(0.1))),
-                (65, TimelineEvent::Control(ControlInput::SetThrust(1.))),
-                (80, TimelineEvent::Control(ControlInput::SetThrust(0.1))),
+                (2, ControlInput::SetThrust(1.)),
+                (20, ControlInput::SetThrust(0.)),
+                (60, ControlInput::SetRotation(PI)),
+                (61, ControlInput::SetAngVel(0.1)),
+                (65, ControlInput::SetThrust(1.)),
+                (80, ControlInput::SetThrust(0.1)),
             ]
             .into_iter(),
         ),

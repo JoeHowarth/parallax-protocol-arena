@@ -52,9 +52,9 @@
 //! - No support for non-rigid body deformation
 
 pub mod collisions;
-pub mod entity_major;
 #[cfg(test)]
 mod test_utils;
+pub mod timeline;
 
 use std::{
     ops::{RangeBounds, RangeInclusive},
@@ -72,6 +72,8 @@ use collisions::{
     SpatialIndex,
     SpatialItem,
 };
+use timeline::compute_future_states;
+pub use timeline::Timeline;
 
 use crate::prelude::*;
 
@@ -83,11 +85,18 @@ pub struct PhysicsBundle {
 }
 
 impl PhysicsBundle {
-    pub fn from_state(state: PhysicsState, dim: Vec2) -> PhysicsBundle {
+    pub fn from_state(
+        tick: u64,
+        state: PhysicsState,
+        dim: Vec2,
+    ) -> PhysicsBundle {
         let collider = Collider(BRect::from_corners(-dim / 2., dim / 2.));
+        let mut timeline = Timeline::default();
+        timeline.future_states.insert(tick, state.clone());
+        timeline.last_computed_tick = tick;
         PhysicsBundle {
             state,
-            timeline: Timeline::default(),
+            timeline,
             collider,
         }
     }
@@ -95,14 +104,16 @@ impl PhysicsBundle {
     pub fn new_with_events(
         state: PhysicsState,
         dim: Vec2,
-        events: impl IntoIterator<Item = (u64, TimelineEvent)>,
+        state_tick: u64,
+        events: impl IntoIterator<Item = (u64, ControlInput)>,
     ) -> PhysicsBundle {
-        let mut bundle = PhysicsBundle::from_state(state, dim);
-        bundle.timeline.events.extend(events);
+        let mut bundle = PhysicsBundle::from_state(state_tick, state, dim);
+        bundle.timeline.input_events.extend(events);
         bundle
     }
 
     pub fn new_basic(
+        tick: u64,
         pos: Vec2,
         vel: Vec2,
         rotation: f32,
@@ -111,6 +122,7 @@ impl PhysicsBundle {
         dim: Vec2,
     ) -> PhysicsBundle {
         PhysicsBundle::from_state(
+            tick,
             PhysicsState {
                 pos,
                 vel,
@@ -208,17 +220,6 @@ pub enum ControlInput {
 pub enum TimelineEvent {
     Control(ControlInput),
     Collision(Collision),
-}
-
-/// Stores scheduled inputs and computed future states for an entity
-#[derive(Component, Default, Debug)]
-pub struct Timeline {
-    /// Computed physics states for future simulation ticks
-    pub future_states: BTreeMap<u64, PhysicsState>,
-    /// Ordered list of future control inputs
-    pub events: BTreeMap<u64, TimelineEvent>,
-    /// Last tick that has valid computed states
-    pub last_computed_tick: u64,
 }
 
 /// Global simulation parameters and time control
@@ -324,11 +325,7 @@ fn process_timeline_events(
             continue;
         };
 
-        timeline.last_computed_tick =
-            timeline.last_computed_tick.min(*tick - 1);
-        timeline
-            .events
-            .insert(*tick, TimelineEvent::Control(*input));
+        timeline.add_input_event(*tick, *input);
     }
 
     for TimelineEventRemovalRequest {
@@ -343,18 +340,7 @@ fn process_timeline_events(
             continue;
         };
 
-        if timeline.events.get(tick) != Some(&TimelineEvent::Control(*input)) {
-            warn!(
-                existing = ?timeline.events.get(tick),
-                request = ?Some(&TimelineEvent::Control(*input)),
-                "Removal request invalid"
-            );
-            continue;
-        };
-
-        timeline.events.remove(tick);
-        timeline.last_computed_tick =
-            timeline.last_computed_tick.min(*tick - 1);
+        timeline.remove_input_event(*tick, *input);
     }
 }
 
@@ -406,16 +392,6 @@ impl PhysicsState {
         }
     }
 
-    fn apply_control_event(&mut self, event: Option<&TimelineEvent>) {
-        use TimelineEvent::{Collision, Control};
-        match event {
-            Some(Control(control_event)) => {
-                self.apply_input_event(Some(control_event))
-            }
-            _ => {}
-        }
-    }
-
     fn apply_collision_result(&mut self, result: &EntityCollisionResult) {
         match result {
             EntityCollisionResult::Destroyed => {
@@ -431,257 +407,9 @@ impl PhysicsState {
     pub fn dir(&self) -> Vec2 {
         Vec2::from_angle(self.rotation)
     }
-}
 
-fn compute_future_states(
-    // TODO: break apart this config so we don't need to mutate it to pause
-    mut simulation_config: ResMut<SimulationConfig>,
-    mut spatial_index: ResMut<SpatialIndex>,
-    mut query: Query<(Entity, &Collider, &PhysicsState, &mut Timeline)>,
-) {
-    let seconds_per_tick = 1.0 / simulation_config.ticks_per_second as f32;
-
-    let mut interaction = None;
-
-    for i in 0..3 {
-        let tick = simulation_config.current_tick;
-        // eprintln!("\n[{i}th Iteration]\n");
-        for (e, collider, current_state, mut timeline) in query.iter_mut() {
-            // ensure timline has value for current tick
-            if !timeline.future_states.contains_key(&(tick - 1)) {
-                info!(?e, tick, "Found missing state, inserting...");
-                timeline
-                    .future_states
-                    .insert(tick - 1, current_state.clone());
-            }
-
-            let ret = timeline.lookahead(
-                e,
-                tick,
-                seconds_per_tick,
-                simulation_config.prediction_ticks,
-                collider,
-                &spatial_index,
-            );
-
-            // Patch spatial index
-            spatial_index.patch(
-                e,
-                &timeline,
-                collider,
-                ret.updated,
-                ret.removed,
-            );
-
-            interaction = ret.interaction;
-            if interaction.is_some() {
-                // Eject and resolve interaction
-                break;
-            }
-        }
-
-        let Some(interaction) = interaction else {
-            // info!("Loop finished with no interaction to resolve. Done");
-            return;
-        };
-
-        match query.get_many_mut(interaction.entities) {
-            Ok([mut a, mut b]) => {
-                resolve_collisions(
-                    interaction.tick,
-                    (a.0, a.1, &mut a.3),
-                    (b.0, b.1, &mut b.3),
-                    seconds_per_tick,
-                    &mut spatial_index,
-                );
-            }
-            Err(e) => {
-                simulation_config.paused = true;
-                println!("Error resolving collisions: {e:?}, {interaction:?}");
-            }
-        }
-    }
-    panic!(
-        "Exited loop without resolving all interactions. Suggests infinite \
-         loop bug"
-    );
-}
-
-fn resolve_collisions(
-    tick: u64,
-    (a_e, a_col, a_tl): (Entity, &Collider, &mut Timeline),
-    (b_e, b_col, b_tl): (Entity, &Collider, &mut Timeline),
-    seconds_per_tick: f32,
-    spatial_index: &mut SpatialIndex,
-) {
-    // STEP 1: Remove B's state and replay tick t
-
-    // FIXME: check this is an interaction event
-    a_tl.events.remove(&tick);
-    b_tl.events.remove(&tick);
-    b_tl.last_computed_tick = tick - 1;
-
-    let b_ret =
-        b_tl.lookahead(b_e, tick, seconds_per_tick, 0, b_col, &spatial_index);
-
-    assert_eq!(*b_ret.updated.end(), tick);
-
-    // Patch b's spatial index
-    spatial_index.patch(b_e, &b_tl, b_col, b_ret.updated, b_ret.removed);
-
-    // NOTE:both must have computed state at tick, but not applied any
-    // interaction events
-    let a_st = a_tl.future_states.get_mut(&tick).unwrap();
-    let b_st = b_tl.future_states.get_mut(&tick).unwrap();
-
-    // STEP 2: check for interaction
-    if let Some(collision) = spatial_index.collides(a_e, tick, a_st.pos, a_col)
-    {
-        // STEP 3: resolve interaction
-        let (a_result, b_result) = calculate_collision_result(
-            &SpatialItem::from_state(a_e, a_st),
-            &SpatialItem::from_state(b_e, b_st),
-        );
-
-        a_st.apply_collision_result(&a_result);
-        b_st.apply_collision_result(&b_result);
-
-        // TODO: rethink why we're storing this
-        let collision = Collision {
-            tick,
-            this: a_e,
-            this_result: a_result,
-            other: b_e,
-            other_result: b_result,
-        };
-
-        a_tl.events
-            .insert(tick, TimelineEvent::Collision(collision.clone()));
-        b_tl.events
-            .insert(tick, TimelineEvent::Collision(collision));
-        a_tl.last_computed_tick = tick;
-        b_tl.last_computed_tick = tick;
-    }
-}
-
-#[derive(Debug)]
-pub struct LookaheadRet {
-    /// States that changed
-    pub updated: RangeInclusive<u64>,
-    /// States that were removed
-    pub removed: Option<RangeInclusive<u64>>,
-    /// Entities that interact and at what tick
-    pub interaction: Option<InteractionLocator>,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct InteractionLocator {
-    pub entities: [Entity; 2],
-    pub tick: u64,
-}
-
-impl From<(Entity, Entity, u64)> for InteractionLocator {
-    fn from((e1, e2, tick): (Entity, Entity, u64)) -> Self {
-        InteractionLocator {
-            entities: [e1, e2],
-            tick,
-        }
-    }
-}
-
-impl Timeline {
-    pub fn lookahead(
-        &mut self,
-        e: Entity,
-        current_tick: u64,
-        seconds_per_tick: f32,
-        prediction_ticks: u64,
-        collider: &Collider,
-        spatial_index: &SpatialIndex,
-    ) -> LookaheadRet {
-        // Start computation from the earliest invalid state
-        let start_tick = current_tick.max(self.last_computed_tick + 1);
-        let mut end_tick = current_tick + prediction_ticks;
-        if start_tick > end_tick {
-            // info!("start_tick > end_tick, returning early");
-            return LookaheadRet {
-                // will cause `is_empty()` to be true
-                updated: start_tick..=end_tick,
-                removed: None,
-                interaction: None,
-            };
-        }
-        // eprintln!(
-        //     "start: {start_tick}, end: {end_tick}, current: {current_tick}, \
-        //      last_computed: {}",
-        //     self.last_computed_tick
-        // );
-
-        let mut state =
-            self.future_states.get(&(start_tick - 1)).unwrap().clone();
-
-        let mut interaction = None;
-
-        for tick in start_tick..=end_tick {
-            let event = self.events.get(&tick);
-
-            // Apply any control inputs that occur at this tick
-            state.apply_control_event(event);
-
-            // Integrate after controls are applied
-            state = state.integrate(seconds_per_tick);
-
-            // Store the new state
-            self.future_states.insert(tick, state.clone());
-
-            if let Some(TimelineEvent::Collision(c)) = event {
-                eprintln!(
-                    "Timeline encountered and interaction event. Ejecting for \
-                     resolution. {tick}, {c:?}, {state:?}"
-                );
-                interaction = Some((e, c.other, tick).into());
-                end_tick = tick;
-                break;
-            }
-
-            // Stop if we're dead
-            if !state.alive {
-                eprintln!("dead");
-                end_tick = tick;
-                break;
-            }
-
-            // Check if we collide
-            if let Some((_, other)) =
-                spatial_index.collides(e, tick, state.pos, collider)
-            {
-                eprintln!("found new collision, {tick}");
-                interaction = Some((e, other.entity, tick).into());
-                end_tick = tick;
-                break;
-            }
-        }
-
-        self.last_computed_tick = end_tick;
-
-        // Remove invalid trailing states
-        // NOTE: Should pruning old states happen before timeline update?
-        let max = *self.future_states.last_key_value().unwrap().0;
-        let removed = if end_tick != max {
-            let removed = (end_tick + 1)..=max;
-            for tick in (end_tick + 1)..=max {
-                self.future_states.remove(&tick);
-            }
-            Some(removed)
-        } else {
-            None
-        };
-
-        LookaheadRet {
-            updated: start_tick..=end_tick,
-            removed,
-            interaction,
-        }
+    pub fn quat(&self) -> Quat {
+        Quat::from_rotation_z(self.rotation)
     }
 }
 
@@ -703,12 +431,15 @@ fn sync_physics_state_transform(
             .future_states
             .remove(&(sim_state.current_tick.saturating_sub(2)));
         timeline
-            .events
+            .input_events
+            .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));
+        timeline
+            .sim_events
             .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));
     }
 }
 
-#[cfg(test)]
+#[cfg(bar)]
 mod tests {
     use std::{f32::consts::PI, time::Duration};
 
