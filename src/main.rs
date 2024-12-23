@@ -5,7 +5,13 @@ use std::collections::BTreeMap;
 use asteroid::{AsteroidPlugin, SmallAsteroid};
 use bevy::{
     color::palettes::css,
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    time::common_conditions::on_timer,
     utils::{HashMap, HashSet},
+};
+use bevy_rand::{
+    plugin::EntropyPlugin,
+    prelude::{GlobalEntropy, WyRand},
 };
 use collisions::{Collider, SpatialIndex};
 use parallax_protocol_arena::{
@@ -18,6 +24,7 @@ use parallax_protocol_arena::{
     ParallaxProtocolArenaPlugin,
     Selected,
 };
+use rand::Rng;
 
 fn main() {
     App::new()
@@ -34,15 +41,17 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
             bevy_pancam::PanCamPlugin,
+            EntropyPlugin::<WyRand>::with_seed(123u64.to_ne_bytes()),
+            FrameTimeDiagnosticsPlugin::default(),
         ))
         .add_plugins((
             ParallaxProtocolArenaPlugin {
                 config: (|| {
-                    let tps = 30;
+                    let tps = 10;
                     SimulationConfig {
                         ticks_per_second: tps,
-                        time_dilation: 1.0,
-                        prediction_ticks: tps * 10,
+                        time_dilation: 1.,
+                        prediction_ticks: tps * 30,
                         ..default()
                     }
                 })(),
@@ -51,9 +60,14 @@ fn main() {
             AsteroidPlugin,
             PlasmaCannonPlugin,
         ))
-        .add_systems(PostStartup, setup)
+        .add_systems(Startup, spawn_fps_ui)
+        .add_systems(PostStartup, (setup, generate_asteroid_field).chain())
+        // .add_systems(
+        //     Update,
+        //     generate_asteroid_field.run_if(on_timer(Duration::from_secs(1))),
+        // )
         .add_systems(FixedUpdate, health_despawn)
-        .add_systems(Update, (exit_system,))
+        .add_systems(Update, (exit_system, fps_ui))
         .run();
 }
 
@@ -156,4 +170,53 @@ pub fn ship_bundle(
             .into_iter(),
         ),
     )
+}
+
+fn generate_asteroid_field(
+    mut commands: Commands,
+    mut rng: ResMut<GlobalEntropy<WyRand>>,
+) {
+    for _ in 0..1000 {
+        commands.queue(SmallAsteroid::spawn(
+            Vec2::new(
+                rng.gen_range((-50000.)..(50000.)),
+                rng.gen_range((-50000.)..(50000.)),
+            ),
+            Vec2::new(
+                rng.gen_range((-500.)..(500.)),
+                rng.gen_range((-500.)..(500.)),
+            ),
+        ));
+    }
+}
+
+#[derive(Component)]
+struct FpsUiMarker;
+
+fn spawn_fps_ui(mut commands: Commands) {
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.),
+            right: Val::Px(10.),
+            ..default()
+        })
+        .with_child((Text("fps".into()), FpsUiMarker));
+}
+
+fn fps_ui(
+    diagnostics: Res<DiagnosticsStore>,
+    mut query: Query<&mut Text, With<FpsUiMarker>>,
+) {
+    let mut text = query.single_mut();
+    let Some(value) = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|fps| fps.smoothed())
+    else {
+        return;
+    };
+
+    text.0.clear();
+    use std::fmt::Write;
+    let _ = write!(&mut text.0, "FPS: {value:>3.0}");
 }

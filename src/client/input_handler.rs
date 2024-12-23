@@ -198,6 +198,7 @@ fn handle_engine_input(
                         .map(|(k, v)| (k.clone(), v.clone())),
                 ),
                 last_computed_tick: seg.start_tick,
+                last_updated_range: None,
             },
         });
 

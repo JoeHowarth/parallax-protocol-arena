@@ -2,7 +2,7 @@ use super::*;
 use crate::prelude::*;
 
 /// Stores scheduled inputs and computed future states for an entity
-#[derive(Component, Default, Debug, Clone)]
+#[derive(Component, Debug, Clone)]
 pub struct Timeline {
     /// Computed physics states for future simulation ticks
     pub future_states: BTreeMap<u64, PhysicsState>,
@@ -15,6 +15,20 @@ pub struct Timeline {
     pub sim_events: BTreeMap<u64, Collision>,
     /// Last tick that has valid computed states
     pub last_computed_tick: u64,
+    /// Tick range that was modified most recently
+    pub last_updated_range: Option<RangeInclusive<u64>>,
+}
+
+impl Default for Timeline {
+    fn default() -> Self {
+        Self {
+            future_states: default(),
+            input_events: default(),
+            sim_events: default(),
+            last_computed_tick: default(),
+            last_updated_range: None,
+        }
+    }
 }
 
 impl Timeline {
@@ -50,6 +64,7 @@ pub fn compute_future_states(
     sim_config: Res<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, &Collider, &mut Timeline)>,
+    mut invalid_set: Local<EntityHashMap<u64>>,
 ) {
     eprintln!("\n\n--------");
 
@@ -63,13 +78,15 @@ pub fn compute_future_states(
     // construct map of tick to set{entities | last_updated == tick}
     let mut last_updated_sets = HashMap::<u64, EntityHashSet>::new();
     let mut min_tick = u64::MAX;
+    invalid_set.clear();
 
-    for (entity, _, timeline) in query.iter() {
+    for (entity, _, mut timeline) in query.iter_mut() {
         last_updated_sets
             .entry(timeline.last_computed_tick)
             .or_default()
             .insert(entity);
         min_tick = min_tick.min(timeline.last_computed_tick);
+        timeline.last_updated_range = None;
     }
 
     // set invalid set to min tick in map
@@ -77,24 +94,26 @@ pub fn compute_future_states(
         min_tick >= sim_config.current_tick - 1,
         "min_tick must be >= current tick"
     );
-    dbg!(&last_updated_sets);
-    let mut invalid_set = last_updated_sets.remove(&min_tick).unwrap();
+    // dbg!(&last_updated_sets);
 
     for tick in (min_tick + 1)..=end_tick {
         // add entities that were last computed the previous tick
         // (thus invalid this tick)
         if let Some(set) = last_updated_sets.remove(&(tick - 1)) {
-            invalid_set.extend(set);
+            set.into_iter().for_each(|e| {
+                invalid_set.entry(e).or_insert(tick);
+            });
         }
-        eprintln!("tick {tick}, &invalid_set: {:?}", &invalid_set);
+        // eprintln!("tick {tick}, &invalid_set: {:?}", &invalid_set);
 
         // add pre-dependencies (e.g. elastic beam pairs) to invalid set
 
         // for each in invalid set:
-        for &entity in &invalid_set {
-            let Ok((_, collider, mut timeline)) = query.get_mut(entity) else {
-                panic!("whoops");
-            };
+        for &entity in invalid_set.keys() {
+            let (_, collider, mut timeline) = query.get_mut(entity).unwrap();
+            if timeline.last_updated_range.is_none() {
+                timeline.last_updated_range = Some(tick..=end_tick);
+            }
 
             apply_inputs_and_integrte_phys(
                 tick,
@@ -108,14 +127,32 @@ pub fn compute_future_states(
 
         resolve_collisions(
             tick,
-            &mut invalid_set,
-            &sim_config,
+            seconds_per_tick,
             &mut spatial_index,
             &mut query,
-            seconds_per_tick,
+            &mut invalid_set,
         );
     }
+
+    for (entity, start_tick) in invalid_set.drain() {
+        let (_, _, mut timeline) = query.get_mut(entity).unwrap();
+        timeline.last_updated_range = Some(start_tick..=end_tick);
+    }
 }
+
+// fn invalidate(
+//     tick: u64,
+//     end_tick: u64,
+//     entities: impl IntoIterator<Item = Entity>,
+//     query: &mut Query<(Entity, &Collider, &mut Timeline)>,
+//     invalid_set: &mut EntityHashSet,
+// ) {
+//     for e in entities {
+//         let mut timeline = query.get_mut(e).unwrap().2;
+//         invalid_set.insert(e);
+//         timeline.last_updated_range = Some(tick..=end_tick);
+//     }
+// }
 
 pub fn apply_inputs_and_integrte_phys(
     tick: u64,
@@ -129,7 +166,7 @@ pub fn apply_inputs_and_integrte_phys(
     timeline.sim_events.remove(&tick);
 
     let mut state = timeline
-        .state_mut(tick - 1)
+        .state(tick - 1)
         .expect(
             "Previous tick's state must exist bc of last_updated_sets \
              invariant",
@@ -144,12 +181,14 @@ pub fn apply_inputs_and_integrte_phys(
     // - integrate physics
     state = state.integrate(seconds_per_tick);
 
-    if let Some(spatial_index) = spatial_index {
-        spatial_index.insert(
-            tick,
-            collider,
-            SpatialItem::from_state(entity, &state),
-        );
+    if state.alive {
+        if let Some(spatial_index) = spatial_index {
+            spatial_index.insert(
+                tick,
+                collider,
+                SpatialItem::from_state(entity, &state),
+            );
+        }
     }
     timeline.future_states.insert(tick, state);
     timeline.last_computed_tick = tick;
@@ -157,15 +196,14 @@ pub fn apply_inputs_and_integrte_phys(
 
 fn resolve_collisions(
     tick: u64,
-    invalid_set: &mut EntityHashSet,
-    sim_config: &SimulationConfig,
+    seconds_per_tick: f32,
     spatial_index: &mut SpatialIndex,
     query: &mut Query<(Entity, &Collider, &mut Timeline)>,
-    seconds_per_tick: f32,
+    invalid_set: &mut EntityHashMap<u64>,
 ) {
     // gather collision pairs
     let mut collisions: HashSet<InteractionGroup> = default();
-    for &entity in invalid_set.iter() {
+    for &entity in invalid_set.keys() {
         let (_, collider, timeline) = query.get(entity).unwrap();
         let state = timeline.state(tick).expect("Just added");
 
@@ -175,6 +213,10 @@ fn resolve_collisions(
             collisions.insert((collision.1.entity, entity).into());
         };
     }
+
+    // if !collisions.is_empty() {
+    //     dbg!(&collisions);
+    // }
 
     // resolve broad-phase collisions
     for group in collisions {
@@ -195,7 +237,9 @@ fn resolve_collisions(
         );
 
         // all collision participants are invalidated
-        invalid_set.extend(group.0);
+        group.0.into_iter().for_each(|e| {
+            invalid_set.entry(e).or_insert(tick);
+        });
     }
 }
 
@@ -221,6 +265,31 @@ fn resolve_collision(
         a_st.apply_collision_result(&a_result);
         b_st.apply_collision_result(&b_result);
 
+        match &a_result {
+            EntityCollisionResult::Destroyed => {
+                spatial_index.remove(tick, &a_e)
+            }
+            EntityCollisionResult::Survives { .. } => {
+                spatial_index.insert(
+                    tick,
+                    a_col,
+                    SpatialItem::from_state(a_e, a_st),
+                );
+            }
+        }
+        match &b_result {
+            EntityCollisionResult::Destroyed => {
+                spatial_index.remove(tick, &b_e)
+            }
+            EntityCollisionResult::Survives { .. } => {
+                spatial_index.insert(
+                    tick,
+                    a_col,
+                    SpatialItem::from_state(b_e, b_st),
+                );
+            }
+        }
+
         // TODO: rethink why we're storing this
         let collision = Collision {
             tick,
@@ -232,9 +301,6 @@ fn resolve_collision(
 
         a_tl.sim_events.insert(tick, collision.clone());
         b_tl.sim_events.insert(tick, collision);
-
-        spatial_index.insert(tick, a_col, SpatialItem::from_state(a_e, a_st));
-        spatial_index.insert(tick, b_col, SpatialItem::from_state(b_e, b_st));
 
         a_tl.last_computed_tick = tick;
         b_tl.last_computed_tick = tick;
@@ -333,8 +399,11 @@ mod tests {
         let b_tl = app.world().entity(b).get::<Timeline>().unwrap();
 
         fn s<'a>(tl: &'a Timeline, tick: u64) -> &'a PhysicsState {
-            tl.future_states.get(&tick).unwrap()
+            tl.state(tick).unwrap()
         }
+
+        assert_eq!(a_tl.last_updated_range, Some(1..=4));
+        assert_eq!(b_tl.last_updated_range, Some(1..=4));
 
         states_eq!(s(a_tl, 0), a_st.b().pos(0., 0.).b());
         states_eq!(s(a_tl, 1), a_st.b().pos(10., 0.).b());
@@ -390,6 +459,9 @@ mod tests {
             tl.future_states.get(&tick).unwrap()
         }
 
+        assert_eq!(a_tl.last_updated_range, Some(1..=5));
+        assert_eq!(b_tl.last_updated_range, Some(3..=5));
+
         states_eq!(s(a_tl, 0), a_st.b().pos(0., 0.).b());
         states_eq!(s(a_tl, 1), a_st.b().pos(10., 0.).b());
         states_eq!(s(a_tl, 2), a_st.b().pos(20., 0.).b());
@@ -405,12 +477,14 @@ mod tests {
     #[test]
     fn test_input_events() {
         let mut app = App::new();
+        let config = SimulationConfig {
+            current_tick: 1,
+            ..TEST_CONFIG
+        };
         app.insert_resource(SpatialIndex::default())
-            .insert_resource(SimulationConfig {
-                current_tick: 1,
-                ..TEST_CONFIG
-            })
+            .insert_resource(config.clone())
             .add_systems(Update, compute_future_states);
+        let end_tick = config.current_tick + config.prediction_ticks;
 
         let dim = Vec2::splat(2.);
 
@@ -442,6 +516,15 @@ mod tests {
         fn s<'a>(tl: &'a Timeline, tick: u64) -> &'a PhysicsState {
             tl.future_states.get(&tick).unwrap()
         }
+
+        assert_eq!(
+            a_tl.last_updated_range,
+            Some(config.current_tick..=end_tick)
+        );
+        assert_eq!(
+            b_tl.last_updated_range,
+            Some(config.current_tick..=end_tick)
+        );
 
         states_eq!(s(a_tl, 0), a_st.b().pos(0., 0.).b());
         states_eq!(

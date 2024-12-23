@@ -99,8 +99,11 @@ fn sync_timeline_markers(
             let mut spawn =
                 |marker_entity_timeline: &mut MarkerEntityTimeline| {
                     let Some(phys) = timeline.future_states.get(&tick) else {
-                        error!("Bad");
-                        panic!("bad!");
+                        warn!(
+                            "Trying to create event marker entity w/o state \
+                             for tick"
+                        );
+                        return;
                     };
 
                     let mut entity_commands =
@@ -135,8 +138,8 @@ fn sync_timeline_markers(
 
             alive.insert(*marker_e);
             let Some(phys) = timeline.future_states.get(&tick) else {
-                error!("Bad");
-                panic!("bad!");
+                warn!("Event marker exists, but state does not");
+                panic!("Event marker exists, but state does not");
             };
             if marker.input != *input {
                 marker.input = input.clone();
@@ -211,6 +214,7 @@ fn configure_marker_observers(
                             .map(|(k, v)| (k.clone(), v.clone())),
                     ),
                     last_computed_tick,
+                    last_updated_range: None,
                 },
             });
         },

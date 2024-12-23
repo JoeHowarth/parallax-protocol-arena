@@ -83,7 +83,7 @@ fn preview_lookahead(
 
 fn update_trajectory_segments(
     mut commands: Commands,
-    query: Query<(Entity, &Timeline)>,
+    query: Query<(Entity, &Timeline, Option<&ViewVisibility>)>,
     mut segments_query: Query<
         (
             Entity,
@@ -106,8 +106,36 @@ fn update_trajectory_segments(
     // Calculate pixel-perfect line width in world space
     let line_width = **screen_len_to_world * pixel_width;
 
+    eprintln!("");
+    let Ok(camera) = camera_q.get_single() else {
+        return;
+    };
+
     let mut used_keys = HashSet::with_capacity(segments_map.len());
-    for (craft_entity, timeline) in query.iter() {
+    for (craft_entity, timeline, is_visible) in query.iter() {
+        if let Some(visibility) = is_visible {
+            if !visibility.get() {
+                // check if the start or end of the trajectory are
+                // close to the screen
+
+                let (start_tick, start) =
+                    timeline.future_states.first_key_value().unwrap();
+                let (end_tick, end) =
+                    timeline.future_states.last_key_value().unwrap();
+                let mid_tick = (end_tick + start_tick) / 2;
+
+                if !check_close_to_viewport(camera, start.pos, 2.0)
+                    && !check_close_to_viewport(camera, end.pos, 2.0)
+                    && !check_close_to_viewport(
+                        camera,
+                        timeline.state(mid_tick).unwrap().pos,
+                        2.0,
+                    )
+                {
+                    continue;
+                }
+            }
+        }
         update_trajectory(
             timeline,
             craft_entity,
@@ -150,6 +178,30 @@ fn update_trajectory_segments(
 
     for e in to_delete {
         segments_map.remove(&e);
+    }
+}
+
+fn check_close_to_viewport(
+    (camera, camera_transform): (&Camera, &GlobalTransform),
+    pos: Vec2,
+    cutoff: f32, // 1.0 for screen visibility, >1.0 includes offscreen space
+) -> bool {
+    let ndc = camera.world_to_ndc(camera_transform, pos.extend(0.0));
+
+    // if ndc.is_some() {
+    //     eprintln!("NDC ({:>2.2}, {:>2.2})", ndc.unwrap().x, ndc.unwrap().y,);
+    // }
+
+    // Check if the position is within NDC
+    // bounds
+    match ndc {
+        Some(coords) => {
+            coords.x >= -cutoff
+                && coords.x <= cutoff
+                && coords.y >= -cutoff
+                && coords.y <= cutoff
+        }
+        None => false,
     }
 }
 

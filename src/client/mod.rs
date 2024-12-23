@@ -5,7 +5,9 @@ use crate::{physics::collisions::Collider, prelude::*};
 pub mod event_markers;
 pub mod input_handler;
 pub mod trajectory;
+// pub mod visibility;
 
+use bevy::render::view::VisibilityPlugin;
 pub use event_markers::EventMarkerPlugin;
 pub use input_handler::InputHandlerPlugin;
 pub use trajectory::TrajectoryPlugin;
@@ -20,12 +22,13 @@ pub struct ClientPlugin {
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            // VisibilityPlugin,
             self.event_marker,
             self.input_handler,
             self.trajectory,
         ))
         .insert_resource(ScreenLenToWorld(1.))
-        .add_systems(PreUpdate, calc_screen_length_to_world);
+        .add_systems(PreUpdate, (calc_screen_length_to_world,));
     }
 }
 
@@ -127,5 +130,14 @@ impl<C> GenericDenseTimeline<C> {
         } else {
             None
         }
+    }
+}
+
+pub fn ensure_added<Base: Component, ToAdd: Component + Default>(
+    mut commands: Commands,
+    base: Query<Entity, (With<Base>, Without<ToAdd>)>,
+) {
+    for entity in base.iter() {
+        commands.entity(entity).insert(ToAdd::default());
     }
 }
