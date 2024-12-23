@@ -432,15 +432,12 @@ fn sync_physics_state_transform(
 
         transform.translation = Vec3::from2(phys_state.pos);
         transform.rotation = Quat::from_rotation_z(phys_state.rotation);
-        timeline
-            .future_states
-            .remove(&(sim_state.current_tick.saturating_sub(2)));
-        timeline
-            .input_events
-            .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));
-        timeline
-            .sim_events
-            .retain(|k, _v| *k > sim_state.current_tick.saturating_sub(1));
+
+        if let Some(to_remove) = sim_state.current_tick.checked_sub(2) {
+            timeline.future_states.remove(&to_remove);
+            timeline.input_events.retain(|k, _v| *k > to_remove + 1);
+            timeline.sim_events.retain(|k, _v| *k > to_remove + 1);
+        }
     }
 }
 

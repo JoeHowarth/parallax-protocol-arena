@@ -6,7 +6,7 @@ use asteroid::{AsteroidPlugin, SmallAsteroid};
 use bevy::{
     color::palettes::css,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    time::common_conditions::on_timer,
+    time::common_conditions::{on_real_timer, on_timer},
     utils::{HashMap, HashSet},
 };
 use bevy_rand::{
@@ -67,7 +67,13 @@ fn main() {
         //     generate_asteroid_field.run_if(on_timer(Duration::from_secs(1))),
         // )
         .add_systems(FixedUpdate, health_despawn)
-        .add_systems(Update, (exit_system, fps_ui))
+        .add_systems(
+            Update,
+            (
+                exit_system,
+                fps_ui.run_if(on_real_timer(Duration::from_millis(200))),
+            ),
+        )
         .run();
 }
 
@@ -176,11 +182,11 @@ fn generate_asteroid_field(
     mut commands: Commands,
     mut rng: ResMut<GlobalEntropy<WyRand>>,
 ) {
-    for _ in 0..1000 {
+    for _ in 0..100 {
         commands.queue(SmallAsteroid::spawn(
             Vec2::new(
-                rng.gen_range((-50000.)..(50000.)),
-                rng.gen_range((-50000.)..(50000.)),
+                rng.gen_range((-5000.)..(5000.)),
+                rng.gen_range((-5000.)..(5000.)),
             ),
             Vec2::new(
                 rng.gen_range((-500.)..(500.)),

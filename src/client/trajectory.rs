@@ -1,4 +1,6 @@
-use super::ScreenLenToWorld;
+use bevy::ecs::{component, world::DeferredWorld};
+
+use super::{ensure_added, EntityTimeline, ScreenLenToWorld};
 use crate::{
     physics::{
         timeline::apply_inputs_and_integrte_phys,
@@ -18,12 +20,29 @@ pub struct TrajectorySegment {
     pub is_preview: bool,
 }
 
-// Bundle to create a trajectory segment entity
-#[derive(Bundle)]
-struct TrajectorySegmentBundle {
-    sprite: Sprite,
-    transform: Transform,
-    segment: TrajectorySegment,
+impl TrajectorySegment {
+    pub fn bundle(self) -> impl Bundle {
+        let center_pos = (self.start_pos + self.end_pos) / 2.0;
+        (
+            Sprite::from_color(
+                Color::srgba(0.0, 0.0, 0.0, 0.0),
+                Vec2::new(1., 5.),
+            ),
+            Transform::from_translation(center_pos.to3()),
+            self,
+        )
+    }
+
+    pub fn spawn(self, commands: &mut Commands) -> Entity {
+        let tick = self.end_tick;
+        commands
+            .spawn(self.bundle())
+            .with_child(Sprite::from_color(
+                Color::srgba(0.5, 0.5, 0.5, (tick % 2) as f32 * 0.5),
+                Vec2::new(1., 1.),
+            ))
+            .id()
+    }
 }
 
 #[derive(Resource, Debug)]
@@ -38,14 +57,21 @@ pub struct TrajectoryPlugin;
 
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                // update_event_markers,
-                preview_lookahead,
-                (update_trajectory_segments, update_segment_visuals).chain(),
-            ),
-        );
+        app //
+            .add_systems(
+                Update,
+                (
+                    ensure_added::<Timeline, TrajectorySegmentTimeline>,
+                    preview_lookahead,
+                    (
+                        sync_preview_segments,
+                        render_trajectory_segments,
+                        update_segment_visuals,
+                    )
+                        .chain(),
+                ),
+            )
+            .add_systems(FixedPostUpdate, (sync_trajectory_segments).chain());
     }
 }
 
@@ -81,103 +107,190 @@ fn preview_lookahead(
     }
 }
 
-fn update_trajectory_segments(
+#[derive(Component, Deref, DerefMut, Default)]
+#[component(on_remove = TrajectorySegmentTimeline::on_remove)]
+struct TrajectorySegmentTimeline(EntityTimeline<TrajectorySegment>);
+
+impl TrajectorySegmentTimeline {
+    pub fn on_remove(
+        mut world: DeferredWorld,
+        entity: Entity,
+        _: component::ComponentId,
+    ) {
+        let timeline = world
+            .entity(entity)
+            .get::<TrajectorySegmentTimeline>()
+            .unwrap();
+        // we allocate here to avoid world aliasing with commands
+        let entities =
+            timeline.0.map.values().copied().collect::<Vec<Entity>>();
+
+        let mut commands = world.commands();
+        for e in entities {
+            commands.entity(e).despawn_recursive();
+        }
+    }
+}
+
+fn sync_trajectory_segments(
     mut commands: Commands,
-    query: Query<(Entity, &Timeline, Option<&ViewVisibility>)>,
-    mut segments_query: Query<
-        (
-            Entity,
-            &mut TrajectorySegment,
-            &mut Transform,
-            &mut Sprite,
-            &Children,
-        ),
-        Without<Camera>,
-    >,
-    mut visual_lines: Query<&mut Sprite, Without<TrajectorySegment>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    // windows: Query<&Window>,
+    mut crafts: Query<(Entity, &Timeline, &mut TrajectorySegmentTimeline)>,
+    mut segments: Query<(Entity, &mut TrajectorySegment, &mut Transform)>,
+    sim_config: Res<SimulationConfig>,
+    // TODO: create multi-tick segments based off ticks_per_second
+) {
+    for (craft_entity, timeline, mut segment_timeline) in crafts.iter_mut() {
+        // STEP 1: ensure there is a segment for each updated tick
+        let Some(range) = timeline.last_updated_range.clone() else {
+            continue;
+        };
+        // dbg!(&timeline);
+        let mut first_dead = None;
+        for tick in range.clone() {
+            if !timeline.state(tick).unwrap().alive {
+                first_dead = Some(tick);
+                break;
+            }
+
+            let mut spawn =
+                |segment_timeline: &mut TrajectorySegmentTimeline| {
+                    let segment = TrajectorySegment {
+                        craft_entity,
+                        start_tick: tick - 1,
+                        end_tick: tick,
+                        start_pos: timeline.state(tick - 1).unwrap().pos,
+                        end_pos: timeline.state(tick).unwrap().pos,
+                        is_preview: false,
+                    };
+                    segment_timeline.insert(tick, segment.spawn(&mut commands));
+                };
+
+            let Some(seg_e) = segment_timeline.get(tick) else {
+                spawn(&mut segment_timeline);
+                continue;
+            };
+
+            let Ok((_, mut segment, mut transform)) = segments.get_mut(*seg_e)
+            else {
+                spawn(&mut segment_timeline);
+                continue;
+            };
+
+            segment.start_pos = timeline.state(tick - 1).unwrap().pos;
+            segment.end_pos = timeline.state(tick).unwrap().pos;
+            transform.translation =
+                ((segment.start_pos + segment.end_pos) / 2.0).to3();
+        }
+
+        // STEP 2: Remove all segments since fist_dead
+        if let Some(first_dead) = first_dead {
+            for tick in first_dead..=*range.end() {
+                let Some(seg_e) = segment_timeline.map.remove(&tick) else {
+                    continue;
+                };
+                commands.entity(seg_e).despawn_recursive();
+            }
+        }
+
+        // STEP 3: Remove all segments older than current tick
+        for (&tick, &seg_e) in segment_timeline.0.map.iter() {
+            if tick >= sim_config.current_tick {
+                break;
+            }
+            commands.entity(seg_e).despawn_recursive();
+        }
+        segment_timeline
+            .0
+            .map
+            .retain(|tick, _| *tick >= sim_config.current_tick);
+
+        // Note: handling despawning a craft is done through segment_timeline
+        //       component hooks
+    }
+}
+
+fn sync_preview_segments(
+    mut commands: Commands,
     preview: Option<Res<TrajectoryPreview>>,
+    mut seg_ents: Local<EntityHashSet>,
+) {
+    // despawn all preview segments
+    for e in seg_ents.drain() {
+        commands.entity(e).despawn_recursive();
+    }
+
+    let Some(preview) = preview else {
+        return;
+    };
+
+    let mut iter = preview
+        .timeline
+        .future_states
+        .iter()
+        .map(|(t, s)| (t, s.pos))
+        .peekable();
+
+    while let Some((&start_tick, start_pos)) = iter.next() {
+        let Some((end_tick, end_pos)) = iter.peek().copied() else {
+            break;
+        };
+
+        let segment = TrajectorySegment {
+            craft_entity: preview.entity,
+            start_tick,
+            end_tick: *end_tick,
+            start_pos,
+            end_pos,
+            is_preview: true,
+        };
+
+        seg_ents.insert(segment.spawn(&mut commands));
+    }
+}
+
+fn render_trajectory_segments(
+    mut segments: Query<(
+        Entity,
+        &TrajectorySegment,
+        &mut Sprite,
+        &mut Transform,
+        &Children,
+        Option<&ViewVisibility>,
+    )>,
+    mut visual_lines: Query<&mut Sprite, Without<TrajectorySegment>>,
     screen_len_to_world: Res<ScreenLenToWorld>,
-    mut segments_map: Local<HashMap<(Entity, u64), Entity>>,
-    mut preview_segments: Local<HashMap<(Entity, u64), Entity>>,
 ) {
     let pixel_width = 3.;
     // Calculate pixel-perfect line width in world space
     let line_width = **screen_len_to_world * pixel_width;
 
-    eprintln!("");
-    let Ok(camera) = camera_q.get_single() else {
-        return;
-    };
-
-    let mut used_keys = HashSet::with_capacity(segments_map.len());
-    for (craft_entity, timeline, is_visible) in query.iter() {
-        if let Some(visibility) = is_visible {
-            if !visibility.get() {
-                // check if the start or end of the trajectory are
-                // close to the screen
-
-                let (start_tick, start) =
-                    timeline.future_states.first_key_value().unwrap();
-                let (end_tick, end) =
-                    timeline.future_states.last_key_value().unwrap();
-                let mid_tick = (end_tick + start_tick) / 2;
-
-                if !check_close_to_viewport(camera, start.pos, 2.0)
-                    && !check_close_to_viewport(camera, end.pos, 2.0)
-                    && !check_close_to_viewport(
-                        camera,
-                        timeline.state(mid_tick).unwrap().pos,
-                        2.0,
-                    )
-                {
-                    continue;
-                }
-            }
+    for (seg_e, seg, mut hitbox, mut transform, children, view_visibility) in
+        segments.iter_mut()
+    {
+        if let None = view_visibility {
+            eprintln!("No visibility");
         }
-        update_trajectory(
-            timeline,
-            craft_entity,
-            &mut commands,
-            &mut segments_query,
-            &mut visual_lines,
-            &mut segments_map,
-            Some(&mut used_keys),
-            line_width,
-        );
-    }
 
-    match preview {
-        Some(preview) => update_trajectory(
-            &preview.timeline,
-            preview.entity,
-            &mut commands,
-            &mut segments_query,
-            &mut visual_lines,
-            &mut preview_segments,
-            None,
-            line_width,
-        ),
-        None => {
-            preview_segments
-                .values()
-                .for_each(|e| commands.entity(*e).despawn_recursive());
-            preview_segments.clear();
+        if !seg.is_preview
+            && view_visibility.is_some()
+            && !view_visibility.unwrap().get()
+        {
+            continue;
         }
-    }
 
-    // Clean up unused segments
-    let mut to_delete = Vec::new();
-    for (k, e) in segments_map.iter() {
-        if !used_keys.contains(k) {
-            commands.entity(*e).despawn_recursive();
-            to_delete.push(*k);
-        }
-    }
+        let diff = seg.end_pos - seg.start_pos;
+        let length = diff.length();
+        let center_pos = (seg.start_pos + seg.end_pos) / 2.0;
+        let angle = diff.y.atan2(diff.x);
 
-    for e in to_delete {
-        segments_map.remove(&e);
+        transform.translation = center_pos.to3();
+        transform.rotation = Quat::from_rotation_z(angle);
+        hitbox.custom_size = Some(Vec2::new(length, line_width * 5.));
+
+        let mut sprite = visual_lines
+            .get_mut(children[0])
+            .expect("Expected trajectory segment to have child");
+        sprite.custom_size = Some(Vec2::new(length, line_width));
     }
 }
 
@@ -202,109 +315,6 @@ fn check_close_to_viewport(
                 && coords.y <= cutoff
         }
         None => false,
-    }
-}
-
-fn update_trajectory(
-    timeline: &Timeline,
-    craft_entity: Entity,
-    commands: &mut Commands,
-    segments_query: &mut Query<
-        (
-            Entity,
-            &mut TrajectorySegment,
-            &mut Transform,
-            &mut Sprite,
-            &Children,
-        ),
-        Without<Camera>,
-    >,
-    visual_lines: &mut Query<&mut Sprite, Without<TrajectorySegment>>,
-    segments_map: &mut HashMap<(Entity, u64), Entity>,
-    mut used_keys_or_is_preview: Option<&mut HashSet<(Entity, u64)>>,
-    line_width: f32,
-) {
-    let positions = timeline
-        .future_states
-        .iter()
-        .take_while(|(_, s)| s.alive)
-        .map(|(tick, state)| (*tick, state.pos))
-        .collect::<Vec<_>>();
-
-    if positions.len() >= 2 {
-        for window in positions.windows(2) {
-            let (start_tick, start_pos) = window[0];
-            let (end_tick, end_pos) = window[1];
-
-            let length = (end_pos - start_pos).length();
-            let angle = (end_pos - start_pos).y.atan2((end_pos - start_pos).x);
-            let center_pos = (start_pos + end_pos) / 2.0;
-
-            used_keys_or_is_preview
-                .as_mut()
-                .map(|used_keys| used_keys.insert((craft_entity, start_tick)));
-
-            let Some(seg_ent) = segments_map.get(&(craft_entity, start_tick))
-            else {
-                segments_map.insert(
-                    (craft_entity, start_tick),
-                    commands
-                        .spawn((TrajectorySegmentBundle {
-                            sprite: Sprite::from_color(
-                                Color::srgba(0.0, 0.0, 0.0, 0.0),
-                                Vec2::new(length, line_width * 5.),
-                            ),
-                            transform: Transform::from_translation(
-                                center_pos.to3(),
-                            )
-                            .with_rotation(Quat::from_rotation_z(angle)),
-                            segment: TrajectorySegment {
-                                craft_entity,
-                                start_tick,
-                                end_tick,
-                                start_pos,
-                                end_pos,
-                                is_preview: used_keys_or_is_preview.is_none(),
-                            },
-                        },))
-                        .with_child(Sprite::from_color(
-                            Color::srgba(
-                                0.5,
-                                0.5,
-                                0.5,
-                                (end_tick % 2) as f32 * 0.5,
-                            ),
-                            Vec2::new(length, line_width),
-                        ))
-                        .id(),
-                );
-                continue;
-            };
-
-            let Ok((_entity, mut segment, mut transform, mut sprite, children)) =
-                segments_query.get_mut(*seg_ent)
-            else {
-                panic!("oops");
-            };
-
-            // Update existing segment
-            segment.start_tick = start_tick;
-            segment.end_tick = end_tick;
-            segment.start_pos = start_pos;
-            segment.end_pos = end_pos;
-
-            transform.translation = Vec3::from2(center_pos);
-            transform.rotation = Quat::from_rotation_z(angle);
-
-            sprite.custom_size = Some(Vec2::new(length, line_width * 5.));
-            if let Ok(mut sprite) = visual_lines.get_mut(children[0]) {
-                let Some(size) = sprite.custom_size.as_mut() else {
-                    continue;
-                };
-                size.x = length;
-                size.y = line_width;
-            }
-        }
     }
 }
 

@@ -63,7 +63,7 @@ impl SmallAsteroid {
     pub fn spawn(position: Vec2, velocity: Vec2) -> impl Command {
         move |world: &mut World| {
             let assets = world.resource::<AsteroidAssets>();
-            let tick = world.resource::<SimulationConfig>().current_tick;
+            let tick = dbg!(world.resource::<SimulationConfig>().current_tick);
             world.spawn(Self::bundle(tick, assets, position, velocity));
         }
     }
