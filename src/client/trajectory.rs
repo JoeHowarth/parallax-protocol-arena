@@ -1,4 +1,7 @@
-use bevy::ecs::{component, world::DeferredWorld};
+use bevy::{
+    ecs::{component, world::DeferredWorld},
+    utils::Parallel,
+};
 
 use super::{ensure_added, EntityTimeline, ScreenLenToWorld};
 use crate::{
@@ -264,33 +267,40 @@ fn render_trajectory_segments(
     // Calculate pixel-perfect line width in world space
     let line_width = **screen_len_to_world * pixel_width;
 
-    for (seg_e, seg, mut hitbox, mut transform, children, view_visibility) in
-        segments.iter_mut()
-    {
-        if let None = view_visibility {
-            eprintln!("No visibility");
-        }
+    let mut entities: Parallel<Vec<(Entity, Vec2)>> = default();
 
-        if !seg.is_preview
-            && view_visibility.is_some()
-            && !view_visibility.unwrap().get()
-        {
-            continue;
-        }
+    // for (seg_e, seg, mut hitbox, mut transform, children, view_visibility) in
+    segments.par_iter_mut().for_each_init(|| entities.borrow_local_mut(),
+        |entities, (seg_e, seg, mut hitbox, mut transform, children, view_visibility)| {
+            if let None = view_visibility {
+                eprintln!("No visibility");
+            }
 
-        let diff = seg.end_pos - seg.start_pos;
-        let length = diff.length();
-        let center_pos = (seg.start_pos + seg.end_pos) / 2.0;
-        let angle = diff.y.atan2(diff.x);
+            if !seg.is_preview
+                && view_visibility.is_some()
+                && !view_visibility.unwrap().get()
+            {
+                return;
+            }
 
-        transform.translation = center_pos.to3();
-        transform.rotation = Quat::from_rotation_z(angle);
-        hitbox.custom_size = Some(Vec2::new(length, line_width * 5.));
+            let diff = seg.end_pos - seg.start_pos;
+            let length = diff.length();
+            let center_pos = (seg.start_pos + seg.end_pos) / 2.0;
+            let angle = diff.y.atan2(diff.x);
+            
+            entities.push((children[0], Vec2::new(length, line_width)));
 
+            transform.translation = center_pos.to3();
+            transform.rotation = Quat::from_rotation_z(angle);
+            hitbox.custom_size = Some(Vec2::new(length, line_width * 5.));
+        },
+    );
+
+    for (entity, size) in entities.iter_mut().flatten() {
         let mut sprite = visual_lines
-            .get_mut(children[0])
+            .get_mut(*entity)
             .expect("Expected trajectory segment to have child");
-        sprite.custom_size = Some(Vec2::new(length, line_width));
+        sprite.custom_size = Some(*size);
     }
 }
 

@@ -182,7 +182,7 @@ fn generate_asteroid_field(
     mut commands: Commands,
     mut rng: ResMut<GlobalEntropy<WyRand>>,
 ) {
-    for _ in 0..100 {
+    for _ in 0..1000 {
         commands.queue(SmallAsteroid::spawn(
             Vec2::new(
                 rng.gen_range((-5000.)..(5000.)),
