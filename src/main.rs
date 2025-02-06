@@ -21,6 +21,7 @@ use parallax_protocol_arena::{
     physics::*,
     prelude::*,
     subsystems::plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin},
+    subsystems::unguided_missile::{UnguidedMissile, UnguidedMissilePlugin},
     ParallaxProtocolArenaPlugin,
     Selected,
 };
@@ -59,6 +60,7 @@ fn main() {
             },
             AsteroidPlugin,
             PlasmaCannonPlugin,
+            UnguidedMissilePlugin,
         ))
         .add_systems(Startup, spawn_fps_ui)
         .add_systems(PostStartup, (setup, generate_asteroid_field).chain())
@@ -152,6 +154,7 @@ pub fn ship_bundle(
             ..default()
         },
         PlasmaCannon::default(),
+        UnguidedMissile::default(),
         PhysicsBundle::new_with_events(
             PhysicsState {
                 pos,
