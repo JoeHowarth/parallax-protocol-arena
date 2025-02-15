@@ -31,18 +31,14 @@ pub fn viz_colliders(
         gizmos.rect_2d(
             Isometry2d::new(phys.pos, Rot2::radians(0.)),
             collider.0.size(),
-            bevy::color::palettes::css::TOMATO,
+            bevy::color::Color::srgb(0.4, 0.4, 0.4),
         );
     }
 }
 
 #[derive(Clone, PartialEq, Debug, Reflect)]
 pub struct Collision {
-    pub tick: u64,
-    pub this: Entity,
-    pub this_result: EntityCollisionResult,
     pub other: Entity,
-    pub other_result: EntityCollisionResult,
 }
 
 #[derive(Clone, PartialEq, Debug, Reflect)]

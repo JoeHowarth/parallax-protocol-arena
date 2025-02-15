@@ -5,7 +5,6 @@ use crate::{physics::collisions::Collider, prelude::*};
 pub mod event_markers;
 pub mod input_handler;
 pub mod trajectory;
-// pub mod visibility;
 
 use bevy::render::view::VisibilityPlugin;
 pub use event_markers::EventMarkerPlugin;
@@ -22,13 +21,12 @@ pub struct ClientPlugin {
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            // VisibilityPlugin,
             self.event_marker,
             self.input_handler,
             self.trajectory,
         ))
         .insert_resource(ScreenLenToWorld(1.))
-        .add_systems(PreUpdate, (calc_screen_length_to_world,));
+        .add_systems(PreUpdate, (calc_screen_length_to_world.pipe(eat_error),));
     }
 }
 
@@ -38,19 +36,17 @@ pub struct ScreenLenToWorld(pub f32);
 fn calc_screen_length_to_world(
     camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut screen_length_to_world: ResMut<ScreenLenToWorld>,
-) {
-    let _ =
-        (|| -> Result<(), bevy::render::camera::ViewportConversionError> {
-            let (camera, camera_transform) = camera_q.single();
-            let world_diff = camera
-                .viewport_to_world_2d(camera_transform, Vec2::new(1., 0.))?
-                - camera.viewport_to_world_2d(
-                    camera_transform,
-                    Vec2::new(0., 0.),
-                )?;
-            screen_length_to_world.0 = world_diff.x;
-            Ok(())
-        })();
+) -> Result<(), bevy::render::camera::ViewportConversionError> {
+    let (camera, camera_transform) = camera_q.single();
+    let world_diff = camera
+        .viewport_to_world_2d(camera_transform, Vec2::new(1., 0.))?
+        - camera.viewport_to_world_2d(camera_transform, Vec2::new(0., 0.))?;
+    screen_length_to_world.0 = world_diff.x;
+    Ok(())
+}
+
+pub fn eat_error<T>(r: In<Result<(), T>>) {
+    let _ = r;
 }
 
 pub type EntityTimeline<T> = GenericSparseTimeline<Entity, T>;

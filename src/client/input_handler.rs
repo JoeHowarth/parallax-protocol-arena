@@ -1,3 +1,24 @@
+//! Real-time control input handling for spacecraft
+//! 
+//! This module is responsible for managing direct user control of spacecraft through
+//! keyboard and mouse input. It handles:
+//! 
+//! - Input mode switching (thrust/rotation, missile firing, plasma cannon)
+//! - Real-time thrust and rotation control through drag operations
+//! - Time dilation and pause controls
+//! - Immediate trajectory preview feedback
+//!
+//! # Input Modes
+//! The module maintains different input modes that determine how user inputs are interpreted:
+//! - `ThrustAndRotation`: Direct spacecraft control
+//! - `FireMissile`: Missile targeting and launch
+//! - `PlasmaCannon`: Weapon aiming and firing
+//!
+//! # Trajectory Preview
+//! When performing thrust/rotation operations, this module creates temporary trajectory
+//! previews to show the immediate effects of control inputs. These previews are managed
+//! through the `TrajectoryPreview` resource.
+
 use core::f32;
 use std::marker::PhantomData;
 
@@ -171,6 +192,7 @@ fn handle_engine_input(
     mut timeline_event_writer: EventWriter<TimelineEventRequest>,
     mut commands: Commands,
 ) {
+    const THRUST_SCALE: f32 = 100.;
     for drag_start in drag_start_r.read() {
         if drag_start.button != PointerButton::Primary {
             continue;
@@ -227,7 +249,7 @@ fn handle_engine_input(
         preview.timeline.add_input_event(
             seg.end_tick,
             ControlInput::SetThrustAndRotation(
-                (world_drag.length() / 50.).min(1.),
+                (world_drag.length() / THRUST_SCALE).min(1.),
                 world_drag.to_angle(),
             ),
         );
@@ -260,7 +282,7 @@ fn handle_engine_input(
             entity: seg.craft_entity,
             tick: seg.end_tick,
             input: ControlInput::SetThrustAndRotation(
-                (world_drag.length() / 50.).min(1.),
+                (world_drag.length() / THRUST_SCALE).min(1.),
                 world_drag.to_angle(),
             ),
         });

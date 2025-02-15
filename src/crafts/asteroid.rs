@@ -4,7 +4,7 @@ use bevy::{
     ecs::component::{RequiredComponent, RequiredComponentConstructor},
     sprite::Anchor,
 };
-use rand::Rng;
+use bevy_rand::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -34,6 +34,7 @@ impl SmallAsteroid {
         assets: &AsteroidAssets,
         position: Vec2,
         velocity: Vec2,
+        size: f32,
     ) -> impl Bundle {
         (
             Self,
@@ -44,27 +45,27 @@ impl SmallAsteroid {
                     index: 0,
                 },
             ),
-            Transform::from_scale(Vec3::new(1., 1., 1.))
+            Transform::from_scale(Vec3::new(size, size, size))
                 .with_translation(position.to3()),
             PhysicsBundle::from_state(
                 tick,
                 PhysicsState {
                     pos: position,
                     vel: velocity,
-                    mass: 10.,
+                    mass: 10. * size,
                     alive: true,
                     ..default()
                 },
-                Vec2::new(28., 28.),
+                Vec2::new(28. * size, 28. * size),
             ),
         )
     }
 
-    pub fn spawn(position: Vec2, velocity: Vec2) -> impl Command {
+    pub fn spawn(position: Vec2, velocity: Vec2, size: f32) -> impl Command {
         move |world: &mut World| {
             let assets = world.resource::<AsteroidAssets>();
             let tick = dbg!(world.resource::<SimulationConfig>().current_tick);
-            world.spawn(Self::bundle(tick, assets, position, velocity));
+            world.spawn(Self::bundle(tick, assets, position, velocity, size));
         }
     }
 }

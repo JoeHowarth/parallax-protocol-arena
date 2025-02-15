@@ -6,7 +6,7 @@ use bevy::{
 use super::{ensure_added, EntityTimeline, ScreenLenToWorld};
 use crate::{
     physics::{
-        timeline::apply_inputs_and_integrte_phys,
+        timeline::apply_inputs_and_integrate_phys,
         ControlInput,
         SimulationConfig,
     },
@@ -60,7 +60,7 @@ pub struct TrajectoryPlugin;
 
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
-        app //
+        app 
             .add_systems(
                 Update,
                 (
@@ -99,7 +99,7 @@ fn preview_lookahead(
         simulation_config.current_tick + simulation_config.prediction_ticks;
 
     for tick in start_tick..=end_tick {
-        apply_inputs_and_integrte_phys(
+        apply_inputs_and_integrate_phys(
             tick,
             seconds_per_tick,
             entity,
@@ -107,6 +107,11 @@ fn preview_lookahead(
             collider,
             None,
         );
+
+        if let Some((_, item)) = spatial_index.collides(entity, tick, timeline.state(tick).unwrap().pos, collider) {
+            info!("Preview collision at tick {tick}");
+            timeline.state_mut(tick).unwrap().alive = false;
+        }
     }
 }
 
@@ -147,7 +152,6 @@ fn sync_trajectory_segments(
         let Some(range) = timeline.last_updated_range.clone() else {
             continue;
         };
-        // dbg!(&timeline);
         let mut first_dead = None;
         for tick in range.clone() {
             if !timeline.state(tick).unwrap().alive {
@@ -217,7 +221,9 @@ fn sync_preview_segments(
     preview: Option<Res<TrajectoryPreview>>,
     mut seg_ents: Local<EntityHashSet>,
 ) {
-    // despawn all preview segments
+    // Despawn all preview segments 
+    // This is inefficient, but it doesn't matter since only one preview exists at a time
+    // and consistency is more important than efficiency
     for e in seg_ents.drain() {
         commands.entity(e).despawn_recursive();
     }
@@ -230,6 +236,7 @@ fn sync_preview_segments(
         .timeline
         .future_states
         .iter()
+        .take_while(|s| s.1.alive)
         .map(|(t, s)| (t, s.pos))
         .peekable();
 
@@ -345,7 +352,6 @@ fn update_segment_visuals(
         };
         sprite.color =
             Color::srgba(0.5, 0.5, 0.5, (segment.end_tick % 2) as f32 * alpha);
-        // sprite.custom_size.as_mut().unwrap().y = 2.0;
     }
 
     for e in over.read() {
@@ -359,6 +365,5 @@ fn update_segment_visuals(
             continue;
         };
         sprite.color = Color::srgba(0.5, 1.0, 0.5, alpha);
-        // sprite.custom_size.as_mut().unwrap().y = 5.0;
     }
 }

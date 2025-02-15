@@ -20,8 +20,10 @@ use parallax_protocol_arena::{
     health_despawn,
     physics::*,
     prelude::*,
-    subsystems::plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin},
-    subsystems::unguided_missile::{UnguidedMissile, UnguidedMissilePlugin},
+    subsystems::{
+        plasma_cannon::{PlasmaCannon, PlasmaCannonPlugin},
+        unguided_missile::{UnguidedMissile, UnguidedMissilePlugin},
+    },
     ParallaxProtocolArenaPlugin,
     Selected,
 };
@@ -129,6 +131,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.queue(SmallAsteroid::spawn(
         Vec2::new(150., 50.),
         Vec2::new(100., -2.),
+        1.,
     ));
 }
 
@@ -163,18 +166,18 @@ pub fn ship_bundle(
                 rotation: 0.,
                 mass: 1.,
                 current_thrust: 0.,
-                max_thrust: 100.,
+                max_thrust: 50.,
                 alive: true,
             },
             Vec2::new(px, px),
             tick,
             [
-                (2, ControlInput::SetThrust(1.)),
+                (2, ControlInput::SetThrust(0.1)),
                 (20, ControlInput::SetThrust(0.)),
-                (60, ControlInput::SetRotation(PI)),
-                (61, ControlInput::SetAngVel(0.1)),
-                (65, ControlInput::SetThrust(1.)),
-                (80, ControlInput::SetThrust(0.1)),
+                // (60, ControlInput::SetRotation(PI)),
+                // (61, ControlInput::SetAngVel(0.1)),
+                // (65, ControlInput::SetThrust(1.)),
+                // (80, ControlInput::SetThrust(0.1)),
             ]
             .into_iter(),
         ),
@@ -185,16 +188,17 @@ fn generate_asteroid_field(
     mut commands: Commands,
     mut rng: ResMut<GlobalEntropy<WyRand>>,
 ) {
-    for _ in 0..1000 {
+    for _ in 0..500 {
         commands.queue(SmallAsteroid::spawn(
             Vec2::new(
-                rng.gen_range((-5000.)..(5000.)),
-                rng.gen_range((-5000.)..(5000.)),
+                rng.gen_range((-3000.)..(10000.)),
+                rng.gen_range((-3000.)..(3000.)),
             ),
             Vec2::new(
-                rng.gen_range((-500.)..(500.)),
-                rng.gen_range((-500.)..(500.)),
+                bad_normal_distribution(&mut rng, 0., 10.),
+                bad_normal_distribution(&mut rng, 0., 5.),
             ),
+            bad_log_normal_distribution(&mut rng, 0., 0.5).max(0.1).min(20.),
         ));
     }
 }
@@ -228,4 +232,25 @@ fn fps_ui(
     text.0.clear();
     use std::fmt::Write;
     let _ = write!(&mut text.0, "FPS: {value:>3.0}");
+}
+
+fn bad_normal_distribution(
+    rng: &mut GlobalEntropy<WyRand>,
+    mean: f32,
+    std_dev: f32,
+) -> f32 {
+    let mut x = 0.;
+    for _ in 0..12 {
+        x += rng.gen_range(-1.0..1.0);
+    }
+    x * std_dev + mean
+}
+
+fn bad_log_normal_distribution(
+    rng: &mut GlobalEntropy<WyRand>,
+    mean: f32,
+    std_dev: f32,
+) -> f32 {
+    let mut x = bad_normal_distribution(rng, mean, std_dev);
+    x.exp()
 }

@@ -81,41 +81,58 @@ pub fn compute_future_states(
     invalid_set.clear();
 
     for (entity, _, mut timeline) in query.iter_mut() {
+        let last_computed_tick = timeline.last_computed_tick;
         last_updated_sets
-            .entry(timeline.last_computed_tick)
+            .entry(last_computed_tick)
             .or_default()
             .insert(entity);
         min_tick = min_tick.min(timeline.last_computed_tick);
         timeline.last_updated_range = None;
     }
 
-    // set invalid set to min tick in map
     debug_assert!(
         min_tick >= sim_config.current_tick - 1,
         "min_tick must be >= current tick"
     );
-    // dbg!(&last_updated_sets);
 
+    let mut entities_to_invalidate = Vec::new();
     for tick in (min_tick + 1)..=end_tick {
-        // add entities that were last computed the previous tick
+        // Add entities that were last computed the previous tick
         // (thus invalid this tick)
         if let Some(set) = last_updated_sets.remove(&(tick - 1)) {
             set.into_iter().for_each(|e| {
                 invalid_set.entry(e).or_insert(tick);
             });
         }
-        // eprintln!("tick {tick}, &invalid_set: {:?}", &invalid_set);
 
-        // add pre-dependencies (e.g. elastic beam pairs) to invalid set
+        // Add pre-dependencies (e.g. elastic beam pairs) to invalid set
+        // Note: when more than one sim_event per tick is supported, this must
+        // be done iteratively
+        for &entity in invalid_set.keys() {
+            let (_, _, mut timeline) = query.get_mut(entity).unwrap();
+            if let Some(event) = timeline.sim_events.remove(&tick) {
+                entities_to_invalidate.push(event.other);
+            }
+        }
+        for entity in entities_to_invalidate.drain(..) {
+            let Ok((_, _, mut timeline)) = query.get_mut(entity) else {
+                warn!("Entity not found in query");
+                continue;
+            };
+            // Remove sim event from other entity
+            timeline.sim_events.remove(&tick);
+            // Add to invalid set if not already present
+            invalid_set.entry(entity).or_insert(tick);
+        }
 
-        // for each in invalid set:
+        // For each in invalid set:
         for &entity in invalid_set.keys() {
             let (_, collider, mut timeline) = query.get_mut(entity).unwrap();
             if timeline.last_updated_range.is_none() {
                 timeline.last_updated_range = Some(tick..=end_tick);
             }
 
-            apply_inputs_and_integrte_phys(
+            apply_inputs_and_integrate_phys(
                 tick,
                 seconds_per_tick,
                 entity,
@@ -140,21 +157,7 @@ pub fn compute_future_states(
     }
 }
 
-// fn invalidate(
-//     tick: u64,
-//     end_tick: u64,
-//     entities: impl IntoIterator<Item = Entity>,
-//     query: &mut Query<(Entity, &Collider, &mut Timeline)>,
-//     invalid_set: &mut EntityHashSet,
-// ) {
-//     for e in entities {
-//         let mut timeline = query.get_mut(e).unwrap().2;
-//         invalid_set.insert(e);
-//         timeline.last_updated_range = Some(tick..=end_tick);
-//     }
-// }
-
-pub fn apply_inputs_and_integrte_phys(
+pub fn apply_inputs_and_integrate_phys(
     tick: u64,
     seconds_per_tick: f32,
     entity: Entity,
@@ -175,10 +178,10 @@ pub fn apply_inputs_and_integrte_phys(
 
     let event = timeline.input_events.get(&tick);
 
-    // - apply control input events
+    // Apply control input events
     state.apply_input_event(event);
 
-    // - integrate physics
+    // Integrate physics
     state = state.integrate(seconds_per_tick);
 
     if state.alive {
@@ -201,7 +204,7 @@ fn resolve_collisions(
     query: &mut Query<(Entity, &Collider, &mut Timeline)>,
     invalid_set: &mut EntityHashMap<u64>,
 ) {
-    // gather collision pairs
+    // Gather collision pairs
     let mut collisions: HashSet<InteractionGroup> = default();
     for &entity in invalid_set.keys() {
         let (_, collider, timeline) = query.get(entity).unwrap();
@@ -214,11 +217,7 @@ fn resolve_collisions(
         };
     }
 
-    // if !collisions.is_empty() {
-    //     dbg!(&collisions);
-    // }
-
-    // resolve broad-phase collisions
+    // Resolve broad-phase collisions
     for group in collisions {
         let [mut a, mut b] = match query.get_many_mut(group.0) {
             Ok(x) => x,
@@ -236,7 +235,7 @@ fn resolve_collisions(
             spatial_index,
         );
 
-        // all collision participants are invalidated
+        // All collision participants are invalidated
         group.0.into_iter().for_each(|e| {
             invalid_set.entry(e).or_insert(tick);
         });
@@ -290,17 +289,8 @@ fn resolve_collision(
             }
         }
 
-        // TODO: rethink why we're storing this
-        let collision = Collision {
-            tick,
-            this: a_e,
-            this_result: a_result,
-            other: b_e,
-            other_result: b_result,
-        };
-
-        a_tl.sim_events.insert(tick, collision.clone());
-        b_tl.sim_events.insert(tick, collision);
+        a_tl.sim_events.insert(tick, Collision { other: b_e });
+        b_tl.sim_events.insert(tick, Collision { other: a_e });
 
         a_tl.last_computed_tick = tick;
         b_tl.last_computed_tick = tick;
@@ -333,7 +323,6 @@ mod tests {
         events: impl IntoIterator<Item = (u64, ControlInput)>,
     ) -> Entity {
         let collider = Collider(BRect::from_corners(-dim / 2., dim / 2.));
-        // let mut states = states.peekable();
         let mut timeline = Timeline {
             future_states: BTreeMap::from_iter(states),
             input_events: BTreeMap::from_iter(events),
@@ -415,6 +404,65 @@ mod tests {
         states_eq!(s(b_tl, 2), b_st.b().b());
         states_eq!(s(b_tl, 3), b_st.b().vel(1., 0.).b());
         states_eq!(s(b_tl, 4), b_st.b().pos(31., 0.).vel(1., 0.).b());
+    }
+
+    #[test]
+    fn test_collision_invalidation_from_input() {
+        let mut app = App::new();
+        app.init_resource::<SpatialIndex>()
+            .insert_resource(SimulationConfig {
+                current_tick: 1,
+                prediction_ticks: 4,
+                ..TEST_CONFIG
+            })
+            .add_systems(Update, compute_future_states);
+
+        let dim = Vec2::splat(2.);
+
+        // Craft A starts at origin, moving right
+        let a_st = TestStateBuilder::new().vel(10., 0.).mass(1.).build();
+        let a = app
+            .world_mut()
+            .spawn(PhysicsBundle::new_with_events(a_st.clone(), dim, 0, []))
+            .id();
+
+        // Craft B starts at x=30, stationary
+        let b_st = TestStateBuilder::new().pos(30., 0.).mass(9.).build();
+        let b = app
+            .world_mut()
+            .spawn(PhysicsBundle::new_with_events(b_st.clone(), dim, 0, []))
+            .id();
+
+        // First update - should compute collision at tick 3
+        app.update();
+
+        // Verify initial collision state
+        let a_tl = app.world().entity(a).get::<Timeline>().unwrap();
+        let b_tl = app.world().entity(b).get::<Timeline>().unwrap();
+
+        assert!(a_tl.sim_events.contains_key(&3));
+        assert!(b_tl.sim_events.contains_key(&3));
+        assert!(!a_tl.state(3).unwrap().alive);
+
+        // Add input at tick 2 that changes A's trajectory
+        let world = app.world_mut();
+        let mut entity = world.entity_mut(a);
+        let mut a_tl = entity.get_mut::<Timeline>().unwrap();
+        a_tl.add_input_event(2, ControlInput::SetThrustAndRotation(1., PI));
+
+        // Second update - should recompute and remove collision
+        app.update();
+
+        let a_tl = app.world().entity(a).get::<Timeline>().unwrap();
+        let b_tl = app.world().entity(b).get::<Timeline>().unwrap();
+
+        // Verify collision was removed from both timelines
+        assert!(!a_tl.sim_events.contains_key(&3));
+        assert!(!b_tl.sim_events.contains_key(&3));
+
+        // Verify A is still alive (didn't collide) and B was recomputed
+        assert!(a_tl.state(3).unwrap().alive);
+        assert_eq!(b_tl.last_updated_range, Some(3..=5));
     }
 
     #[test]

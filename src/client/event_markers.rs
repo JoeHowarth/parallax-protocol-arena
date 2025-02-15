@@ -1,3 +1,31 @@
+//! Timeline event visualization and editing
+//!
+//! This module provides visual representation and interaction for historical control
+//! points in the spacecraft timeline. It manages:
+//!
+//! - Visual markers for past control inputs (thrust, rotation, etc.)
+//! - Drag-and-drop editing of historical control points
+//! - Deletion of past control inputs
+//! - Timeline event synchronization
+//!
+//! # Marker Types
+//! Different types of control inputs are represented by distinct visual markers:
+//! - Arrows for thrust inputs
+//! - Arc arrows for rotation changes
+//! - Crosses for collision events
+//!
+//! # Timeline Editing
+//! Users can modify past control inputs by:
+//! - Dragging markers to adjust timing and magnitude
+//! - Right-clicking to delete control points
+//! - Previewing changes before committing them
+//!
+//! # Synchronization
+//! The module ensures markers stay synchronized with the underlying timeline:
+//! - Creates/updates markers for new timeline events
+//! - Removes markers for deleted events
+//! - Updates marker positions based on physics state
+
 use super::{EntityTimeline, ScreenLenToWorld};
 use crate::{
     client::trajectory::TrajectoryPreview,
