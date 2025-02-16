@@ -78,6 +78,9 @@ struct StartPopupUI;
 #[derive(Resource)]
 struct StartPopupTimer(Timer);
 
+#[derive(Resource, Default)]
+struct SlowMotionTimer(Option<Timer>);
+
 fn main() {
     App::new()
         .add_plugins((
@@ -125,6 +128,7 @@ fn main() {
                 handle_game_over,
                 handle_death_screen.run_if(in_state(GameState::DeathScreen)),
                 handle_start_popup.run_if(in_state(GameState::Loading)),
+                handle_slow_motion,
             ),
         )
         .add_systems(
@@ -140,6 +144,7 @@ fn main() {
         .add_systems(OnEnter(GameState::DeathScreen), setup_death_screen)
         .add_systems(OnEnter(GameState::Reset), cleanup_all_state)
         .init_resource::<BestTime>()
+        .init_resource::<SlowMotionTimer>()
         .run();
 }
 
@@ -508,7 +513,8 @@ fn update_time_display(
     } else {
         let _ = write!(&mut text.0, "\nBest: --");
     }
-    let _ = write!(&mut text.0, "\nDialation: {:.2}x", sim_config.time_dilation);
+    let _ =
+        write!(&mut text.0, "\nDialation: {:.2}x", sim_config.time_dilation);
 }
 
 fn reset_camera(mut query: Query<&mut Transform, With<Camera>>) {
@@ -573,5 +579,39 @@ fn handle_start_popup(
         }
         commands.remove_resource::<StartPopupTimer>();
         next_state.set(GameState::Playing);
+    }
+}
+
+fn handle_slow_motion(
+    mut slow_motion: ResMut<SlowMotionTimer>,
+    time: Res<Time>,
+    mut fixed_time: ResMut<Time<Fixed>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut sim_config: ResMut<SimulationConfig>,
+) {
+    // Start slow motion when space is pressed
+    if keys.just_pressed(KeyCode::Space) {
+        slow_motion.0 = Some(Timer::from_seconds(3.0, TimerMode::Once));
+        sim_config.time_dilation = 0.125;
+        // Update the fixed timestep
+        fixed_time.set_timestep_hz(
+            sim_config.ticks_per_second as f64
+                * sim_config.time_dilation as f64,
+        );
+    }
+
+    // Handle timer if it exists
+    if let Some(timer) = &mut slow_motion.0 {
+        timer.tick(time.delta());
+
+        if timer.finished() {
+            sim_config.time_dilation = 1.0;
+            // Update the fixed timestep back to normal
+            fixed_time.set_timestep_hz(
+                sim_config.ticks_per_second as f64
+                    * sim_config.time_dilation as f64,
+            );
+            slow_motion.0 = None;
+        }
     }
 }
