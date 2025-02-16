@@ -60,31 +60,37 @@ impl Timeline {
     }
 }
 
+/// Compute future states for all entities
 pub fn compute_future_states(
     sim_config: Res<SimulationConfig>,
     mut spatial_index: ResMut<SpatialIndex>,
     mut query: Query<(Entity, &Collider, &mut Timeline)>,
     mut invalid_set: Local<EntityHashMap<u64>>,
+    mut last_updated_sets: Local<HashMap<u64, EntityHashSet>>,
 ) {
     if query.is_empty() {
-        eprintln!("No entities match compute future states");
         warn!("No entities match compute future states");
         return;
     }
     let end_tick = sim_config.current_tick + sim_config.prediction_ticks;
     let seconds_per_tick = 1.0 / sim_config.ticks_per_second as f32;
-
-    // construct map of tick to set{entities | last_updated == tick}
-    let mut last_updated_sets = HashMap::<u64, EntityHashSet>::new();
+    // Track min tick so we know where to start
     let mut min_tick = u64::MAX;
-    invalid_set.clear();
 
+    reset_last_updated_sets(
+        &sim_config,
+        &mut last_updated_sets,
+        &mut invalid_set,
+    );
+
+    // Construct map of tick to set{entities | last_updated == tick}
     for (entity, _, mut timeline) in query.iter_mut() {
         last_updated_sets
             .entry(timeline.last_computed_tick)
             .or_default()
             .insert(entity);
         min_tick = min_tick.min(timeline.last_computed_tick);
+        // Clear last_updated_range so we can recompute it
         timeline.last_updated_range = None;
     }
 
@@ -97,39 +103,27 @@ pub fn compute_future_states(
     for tick in (min_tick + 1)..=end_tick {
         // Add entities that were last computed the previous tick
         // (thus invalid this tick)
-        if let Some(set) = last_updated_sets.remove(&(tick - 1)) {
-            set.into_iter().for_each(|e| {
+        if let Some(set) = last_updated_sets.get(&(tick - 1)) {
+            set.iter().for_each(|&e| {
                 invalid_set.entry(e).or_insert(tick);
             });
         }
 
-        // Add pre-dependencies (e.g. elastic beam pairs) to invalid set
-        // Note: when more than one sim_event per tick is supported, this must
-        // be done iteratively
+        invalidate_sim_events(
+            &mut query,
+            &mut invalid_set,
+            &mut entities_to_invalidate,
+            tick,
+        );
+
         for &entity in invalid_set.keys() {
-            let (_, _, mut timeline) = query.get_mut(entity).unwrap();
-            if let Some(event) = timeline.sim_events.remove(&tick) {
-                entities_to_invalidate.push(event.other);
-            }
-        }
-        for entity in entities_to_invalidate.drain(..) {
-            let Ok((_, _, mut timeline)) = query.get_mut(entity) else {
-                warn!("Entity not found in query");
-                continue;
-            };
-            // Remove sim event from other entity
-            timeline.sim_events.remove(&tick);
-            // Add to invalid set if not already present
-            invalid_set.entry(entity).or_insert(tick);
+            let (_, _, timeline) = query.get_mut(entity).unwrap();
         }
 
-        // For each in invalid set:
+        // For each entity in invalid set, apply inputs and integrate physics
+        let mut beam_pairs = Vec::new();
         for &entity in invalid_set.keys() {
             let (_, collider, mut timeline) = query.get_mut(entity).unwrap();
-            if timeline.last_updated_range.is_none() {
-                timeline.last_updated_range = Some(tick..=end_tick);
-            }
-
             apply_inputs_and_integrate_phys(
                 tick,
                 seconds_per_tick,
@@ -138,6 +132,29 @@ pub fn compute_future_states(
                 collider,
                 Some(&mut spatial_index),
             );
+            // Find any elastic beam connections to add
+            if let Some(beam) =
+                timeline.state(tick).unwrap().elastic_beam.as_ref()
+            {
+                beam_pairs.push((entity, beam.connected_entity));
+            }
+        }
+
+        // Integrate beam force on all entities with active beams
+        for (entity, connected_entity) in beam_pairs {
+            // Add debug logging to help track the issue
+            eprintln!("Processing beam pair: {:?}", (entity, connected_entity));
+
+            let [(_, _, mut timeline), (_, _, mut timeline_connected)] =
+                query.get_many_mut([entity, connected_entity]).unwrap();
+            let state = timeline.state_mut(tick).unwrap();
+            let state_connected = timeline_connected.state_mut(tick).unwrap();
+
+            // Integrate beam force on both entities
+            state.integrate_beam(state_connected, seconds_per_tick);
+
+            // Add to invalid set if not already present
+            invalid_set.entry(connected_entity).or_insert(tick);
         }
 
         resolve_collisions(
@@ -152,6 +169,33 @@ pub fn compute_future_states(
     for (entity, start_tick) in invalid_set.drain() {
         let (_, _, mut timeline) = query.get_mut(entity).unwrap();
         timeline.last_updated_range = Some(start_tick..=end_tick);
+    }
+}
+
+/// Add sim_events to invalid set
+/// Note: when more than one sim_event per tick is supported, this must
+/// be done iteratively
+fn invalidate_sim_events(
+    query: &mut Query<'_, '_, (Entity, &Collider, &mut Timeline)>,
+    invalid_set: &mut EntityHashMap<u64>,
+    entities_to_invalidate: &mut Vec<Entity>,
+    tick: u64,
+) {
+    for &entity in invalid_set.keys() {
+        let (_, _, mut timeline) = query.get_mut(entity).unwrap();
+        if let Some(event) = timeline.sim_events.remove(&tick) {
+            entities_to_invalidate.push(event.other);
+        }
+    }
+    for entity in entities_to_invalidate.drain(..) {
+        let Ok((_, _, mut timeline)) = query.get_mut(entity) else {
+            warn!("Entity not found in query");
+            continue;
+        };
+        // Remove sim event from other entity
+        timeline.sim_events.remove(&tick);
+        // Add to invalid set if not already present
+        invalid_set.entry(entity).or_insert(tick);
     }
 }
 
@@ -293,6 +337,24 @@ fn resolve_collision(
         a_tl.last_computed_tick = tick;
         b_tl.last_computed_tick = tick;
     }
+}
+
+/// Reset last_updated_sets and invalid_set
+/// This is used to reduce allocations when computing future states
+fn reset_last_updated_sets(
+    sim_config: &SimulationConfig,
+    last_updated_sets: &mut HashMap<u64, EntityHashSet>,
+    invalid_set: &mut EntityHashMap<u64>,
+) {
+    // Clear each set in last_updated_sets
+    last_updated_sets.iter_mut().for_each(|(_, set)| {
+        set.clear();
+    });
+    // Garbage collect old sets
+    if sim_config.current_tick > 2 {
+        last_updated_sets.remove(&(sim_config.current_tick - 2));
+    }
+    invalid_set.clear();
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -608,5 +670,77 @@ mod tests {
         states_eq!(s(b_tl, 1), b_st.b().b());
         states_eq!(s(b_tl, 2), b_st.b().b());
         states_eq!(s(b_tl, 3), b_st.b().vel(0., 0.).b());
+    }
+
+    #[test]
+    fn test_elastic_beam_connection() {
+        let mut app = App::new();
+        let config = SimulationConfig {
+            current_tick: 1,
+            prediction_ticks: 6,
+            ..TEST_CONFIG
+        };
+        app.insert_resource(SpatialIndex::default())
+            .insert_resource(config.clone())
+            .add_systems(Update, compute_future_states);
+
+        let dim = Vec2::splat(2.);
+
+        // Craft A starts at origin
+        let a_st = TestStateBuilder::new().mass(1.).build();
+
+        // Spawn B first so we have its entity ID
+        let b_st = TestStateBuilder::new().pos(15., 0.).mass(1.).build();
+        let b = app
+            .world_mut()
+            .spawn(PhysicsBundle::new_with_events(b_st.clone(), dim, 0, []))
+            .id();
+
+        // Now spawn A with the correct entity ID for the beam connection
+        let a = app
+            .world_mut()
+            .spawn(PhysicsBundle::new_with_events(
+                a_st.clone(),
+                dim,
+                0,
+                [
+                    // Connect beam at tick 2 using actual entity ID
+                    (2, ControlInput::ElasticBeamConnect(b)),
+                    // Disconnect at tick 4 using actual entity ID
+                    (4, ControlInput::ElasticBeamDisconnect(b)),
+                ],
+            ))
+            .id();
+
+        // First update - should compute states including beam connection
+        app.update();
+
+        let a_tl = app.world().entity(a).get::<Timeline>().unwrap();
+        let b_tl = app.world().entity(b).get::<Timeline>().unwrap();
+
+        // Helper to get state at tick
+        fn s<'a>(tl: &'a Timeline, tick: u64) -> &'a PhysicsState {
+            tl.future_states.get(&tick).unwrap()
+        }
+
+        // Before connection (tick 1)
+        assert!(s(a_tl, 1).elastic_beam.is_none());
+        assert!(s(b_tl, 1).elastic_beam.is_none());
+        assert_approx_eq!(s(a_tl, 1).vel.x, 0.0);
+
+        // After connection (tick 3)
+        let state_3 = s(a_tl, 3);
+        dbg!(state_3);
+        assert!(state_3.elastic_beam.is_some());
+        let beam = state_3.elastic_beam.as_ref().unwrap();
+        assert_eq!(beam.connected_entity, b);
+        // Should be pulled toward B
+        assert!(state_3.vel.x > 0.0);
+
+        // After disconnection (tick 5)
+        assert!(s(a_tl, 5).elastic_beam.is_none());
+        // Velocity should persist but not increase
+        let vel_at_disconnect = s(a_tl, 4).vel.x;
+        assert_approx_eq!(s(a_tl, 5).vel.x, vel_at_disconnect);
     }
 }
