@@ -222,8 +222,8 @@ fn resolve_collisions(
         let [mut a, mut b] = match query.get_many_mut(group.0) {
             Ok(x) => x,
             Err(e) => {
-                eprintln!("{e:?}");
-                panic!("whoops");
+                eprintln!("Error getting entities for collision group: {e:?}");
+                continue;
             }
         };
 

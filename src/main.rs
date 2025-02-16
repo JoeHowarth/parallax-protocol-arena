@@ -434,7 +434,7 @@ fn generate_asteroid_field_with_marker(
 
     let tick = sim_config.current_tick;
 
-    for _ in 0..100 {
+    for _ in 0..1000 {
         commands.spawn((
             SmallAsteroid::bundle(
                 tick,
@@ -444,7 +444,7 @@ fn generate_asteroid_field_with_marker(
                     rng.gen_range((-3000.)..(3000.)),
                 ),
                 Vec2::new(
-                    bad_normal_distribution(&mut rng, 0., 10.),
+                    bad_normal_distribution(&mut rng, 0., 15.),
                     bad_normal_distribution(&mut rng, 0., 5.),
                 ),
                 bad_log_normal_distribution(&mut rng, 0., 0.5)
@@ -519,7 +519,7 @@ fn reset_camera(mut query: Query<&mut Transform, With<Camera>>) {
 
 fn setup_start_popup(mut commands: Commands) {
     commands.insert_resource(StartPopupTimer(Timer::from_seconds(
-        20.0,
+        40.0,
         TimerMode::Once,
     )));
 
