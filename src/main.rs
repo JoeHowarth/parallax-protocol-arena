@@ -508,6 +508,7 @@ fn update_time_display(
     } else {
         let _ = write!(&mut text.0, "\nBest: --");
     }
+    let _ = write!(&mut text.0, "\nDialation: {:.2}x", sim_config.time_dilation);
 }
 
 fn reset_camera(mut query: Query<&mut Transform, With<Camera>>) {
@@ -518,7 +519,7 @@ fn reset_camera(mut query: Query<&mut Transform, With<Camera>>) {
 
 fn setup_start_popup(mut commands: Commands) {
     commands.insert_resource(StartPopupTimer(Timer::from_seconds(
-        10.0,
+        20.0,
         TimerMode::Once,
     )));
 
@@ -539,9 +540,9 @@ fn setup_start_popup(mut commands: Commands) {
         .with_child((
             Text::new(
                 "Race through the asteroid field!\nReach the right side to \
-                 win!\n\nControls:\n• Drag with left mouse to thrust\n• Arrow \
-                 keys to move camera\n• Right mouse to pan camera\n• Space to \
-                 shoot\n• Keys 1-3 to switch weapons\n\nClick anywhere to \
+                 win!\n\nControls:\n- Drag with left mouse to thrust\n- Arrow \
+                 keys to move camera\n- Right mouse to pan camera\n- P to \
+                 pause\n- [ to slow, ] to speed up time\n\nClick anywhere to \
                  start",
             ),
             TextLayout::new_with_justify(JustifyText::Center),
