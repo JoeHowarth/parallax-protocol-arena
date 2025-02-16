@@ -1,12 +1,26 @@
 #![allow(unused_imports)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use asteroid::{AsteroidPlugin, SmallAsteroid};
 use bevy::{
+    app::AppExit,
     color::palettes::css,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    time::common_conditions::{on_real_timer, on_timer},
+    text::FontStyle,
+    time::{
+        common_conditions::{on_real_timer, on_timer},
+        Timer,
+    },
+    ui::{
+        AlignItems,
+        BackgroundColor,
+        JustifyContent,
+        Node,
+        PositionType,
+        UiRect,
+        Val,
+    },
     utils::{HashMap, HashSet},
 };
 use bevy_rand::{
@@ -15,8 +29,8 @@ use bevy_rand::{
 };
 use collisions::{Collider, SpatialIndex};
 use parallax_protocol_arena::{
-    client::ClientPlugin,
-    crafts::Faction,
+    client::{ClientPlugin, GraphicsEnabled},
+    crafts::{asteroid::AsteroidAssets, Faction},
     health_despawn,
     physics::*,
     prelude::*,
@@ -28,6 +42,41 @@ use parallax_protocol_arena::{
     Selected,
 };
 use rand::Rng;
+
+#[derive(States, Debug, Clone, Eq, PartialEq, Hash, Default)]
+enum GameState {
+    #[default]
+    Loading,
+    Playing,
+    DeathScreen,
+    Reset,
+}
+
+#[derive(Event)]
+struct GameOver {
+    victory: bool,
+}
+
+#[derive(Component)]
+struct GameEntity;
+
+#[derive(Resource)]
+struct DeathScreenTimer(Timer);
+
+#[derive(Component)]
+struct DeathScreenUI;
+
+#[derive(Resource, Default)]
+struct BestTime(Option<f32>);
+
+#[derive(Component)]
+struct TimeDisplayUI;
+
+#[derive(Component)]
+struct StartPopupUI;
+
+#[derive(Resource)]
+struct StartPopupTimer(Timer);
 
 fn main() {
     App::new()
@@ -64,20 +113,33 @@ fn main() {
             PlasmaCannonPlugin,
             UnguidedMissilePlugin,
         ))
-        .add_systems(Startup, spawn_fps_ui)
-        .add_systems(PostStartup, (setup, generate_asteroid_field).chain())
-        // .add_systems(
-        //     Update,
-        //     generate_asteroid_field.run_if(on_timer(Duration::from_secs(1))),
-        // )
-        .add_systems(FixedUpdate, health_despawn)
+        .insert_state(GameState::Loading)
+        .add_event::<GameOver>()
+        .add_systems(Startup, startup)
         .add_systems(
             Update,
             (
                 exit_system,
                 fps_ui.run_if(on_real_timer(Duration::from_millis(200))),
+                update_time_display,
+                handle_game_over,
+                handle_death_screen.run_if(in_state(GameState::DeathScreen)),
+                handle_start_popup.run_if(in_state(GameState::Loading)),
             ),
         )
+        .add_systems(
+            FixedUpdate,
+            (
+                health_despawn,
+                (check_victory, check_ship_death)
+                    .run_if(in_state(GameState::Playing)),
+            ),
+        )
+        .add_systems(OnEnter(GameState::Loading), setup_start_popup)
+        .add_systems(OnEnter(GameState::Playing), (setup_game, reset_camera))
+        .add_systems(OnEnter(GameState::DeathScreen), setup_death_screen)
+        .add_systems(OnEnter(GameState::Reset), cleanup_all_state)
+        .init_resource::<BestTime>()
         .run();
 }
 
@@ -90,7 +152,7 @@ pub fn exit_system(
     }
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn startup(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         bevy_pancam::PanCam {
@@ -100,39 +162,59 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
     ));
 
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.),
+            right: Val::Px(10.),
+            ..default()
+        })
+        .with_child((Text("fps".into()), FpsUiMarker));
+
+    commands
+        .spawn((Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(40.),
+            right: Val::Px(10.),
+            ..default()
+        },))
+        .with_child((Text::new("Time: 0.0s\nBest: --"), TimeDisplayUI));
+
+    commands.init_resource::<BestTime>();
+}
+
+fn setup_game(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    sim_config: Res<SimulationConfig>,
+    asteroid_assets: Res<AsteroidAssets>,
+) {
+    eprintln!("Setting up game");
+    commands.insert_resource(GraphicsEnabled);
+    commands.insert_resource(PhysicsEnabled);
+
+    let current_tick = sim_config.current_tick;
     let ship_e = commands
         .spawn(ship_bundle(
             "Ship_rotated.png",
             10.,
             32.,
             Faction::Red,
-            Vec2::new(10., 10.),
+            Vec2::new(0., 0.),
             &asset_server,
-            0,
+            current_tick,
         ))
+        .insert(GameEntity)
         .id();
     info!(ship_entity = ship_e.index(), "Ship Entity");
     commands.insert_resource(Selected(ship_e));
 
-    // commands.spawn(ship_bundle(
-    //     "Ship_rotated.png",
-    //     10.,
-    //     32.,
-    //     Faction::Red,
-    //     Vec2::new(-10., -10.),
-    //     &asset_server,
-    // ));
-    //
-    // commands.queue(SmallAsteroid::spawn(
-    //     Vec2::new(150., 20.),
-    //     Vec2::new(1., -2.),
-    // ));
-
-    commands.queue(SmallAsteroid::spawn(
-        Vec2::new(150., 50.),
-        Vec2::new(100., -2.),
-        1.,
-    ));
+    // Generate initial asteroid field with GameEntity marker
+    generate_asteroid_field_with_marker(
+        &mut commands,
+        sim_config,
+        asteroid_assets,
+    );
 }
 
 pub fn ship_bundle(
@@ -172,12 +254,8 @@ pub fn ship_bundle(
             Vec2::new(px, px),
             tick,
             [
-                (2, ControlInput::SetThrust(0.1)),
-                (20, ControlInput::SetThrust(0.)),
-                // (60, ControlInput::SetRotation(PI)),
-                // (61, ControlInput::SetAngVel(0.1)),
-                // (65, ControlInput::SetThrust(1.)),
-                // (80, ControlInput::SetThrust(0.1)),
+                (tick + 2, ControlInput::SetThrust(0.1)),
+                (tick + 20, ControlInput::SetThrust(0.)),
             ]
             .into_iter(),
         ),
@@ -198,24 +276,15 @@ fn generate_asteroid_field(
                 bad_normal_distribution(&mut rng, 0., 10.),
                 bad_normal_distribution(&mut rng, 0., 5.),
             ),
-            bad_log_normal_distribution(&mut rng, 0., 0.5).max(0.1).min(20.),
+            bad_log_normal_distribution(&mut rng, 0., 0.5)
+                .max(0.1)
+                .min(20.),
         ));
     }
 }
 
 #[derive(Component)]
 struct FpsUiMarker;
-
-fn spawn_fps_ui(mut commands: Commands) {
-    commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.),
-            right: Val::Px(10.),
-            ..default()
-        })
-        .with_child((Text("fps".into()), FpsUiMarker));
-}
 
 fn fps_ui(
     diagnostics: Res<DiagnosticsStore>,
@@ -236,21 +305,272 @@ fn fps_ui(
 
 fn bad_normal_distribution(
     rng: &mut GlobalEntropy<WyRand>,
-    mean: f32,
-    std_dev: f32,
+    mu: f32,
+    sigma: f32,
 ) -> f32 {
     let mut x = 0.;
     for _ in 0..12 {
         x += rng.gen_range(-1.0..1.0);
     }
-    x * std_dev + mean
+    x * sigma + mu
 }
 
 fn bad_log_normal_distribution(
     rng: &mut GlobalEntropy<WyRand>,
-    mean: f32,
-    std_dev: f32,
+    mu: f32,
+    sigma: f32,
 ) -> f32 {
-    let mut x = bad_normal_distribution(rng, mean, std_dev);
-    x.exp()
+    bad_normal_distribution(rng, mu, sigma).exp()
+}
+
+fn check_victory(
+    selected: Option<Res<Selected>>,
+    query: Query<&PhysicsState>,
+    mut game_over: EventWriter<GameOver>,
+) {
+    let Some(selected) = selected else {
+        return;
+    };
+
+    let Ok(physics) = query.get(selected.0) else {
+        return;
+    };
+
+    if physics.pos.x >= 10000.0 {
+        game_over.send(GameOver { victory: true });
+    }
+}
+
+fn check_ship_death(
+    selected: Option<Res<Selected>>,
+    query: Query<&PhysicsState>,
+    mut commands: Commands,
+    mut game_over: EventWriter<GameOver>,
+) {
+    let Some(selected) = selected else {
+        return;
+    };
+
+    // Check if ship is dead via PhysicsState
+    if let Ok(physics) = query.get(selected.0) {
+        if !physics.alive {
+            commands.remove_resource::<Selected>();
+            game_over.send(GameOver { victory: false });
+        }
+    } else {
+        // Entity doesn't exist anymore
+        commands.remove_resource::<Selected>();
+        game_over.send(GameOver { victory: false });
+    }
+}
+
+fn handle_game_over(
+    mut game_over: EventReader<GameOver>,
+    mut next_state: ResMut<NextState<GameState>>,
+    sim_config: Res<SimulationConfig>,
+    mut best_time: ResMut<BestTime>,
+) {
+    for event in game_over.read() {
+        info!("Game Over! Victory: {}", event.victory);
+        if event.victory {
+            let current_time = sim_config.current_tick as f32
+                / sim_config.ticks_per_second as f32;
+            best_time.0 = Some(
+                best_time
+                    .0
+                    .map(|best| best.min(current_time))
+                    .unwrap_or(current_time),
+            );
+        }
+        next_state.set(GameState::DeathScreen);
+    }
+}
+
+fn handle_death_screen(
+    time: Res<Time>,
+    mut timer: ResMut<DeathScreenTimer>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    timer.0.tick(time.delta());
+
+    if timer.0.finished() {
+        next_state.set(GameState::Reset);
+    }
+}
+
+fn cleanup_all_state(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    query: Query<Entity, Or<(With<GameEntity>, With<DeathScreenUI>)>>,
+    mut sim_config: ResMut<SimulationConfig>,
+    mut spatial_index: ResMut<SpatialIndex>,
+) {
+    // Despawn all game entities and UI
+    for entity in query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+
+    // Reset current tick
+    sim_config.current_tick = 0;
+
+    // Clear spatial index
+    spatial_index.0.clear();
+
+    // Remove resources except GameTimer
+    commands.remove_resource::<DeathScreenTimer>();
+    commands.remove_resource::<GraphicsEnabled>();
+    commands.remove_resource::<PhysicsEnabled>();
+
+    // Transition to Playing state
+    next_state.set(GameState::Playing);
+}
+
+fn generate_asteroid_field_with_marker(
+    commands: &mut Commands,
+    sim_config: Res<SimulationConfig>,
+    asteroid_assets: Res<AsteroidAssets>,
+) {
+    let mut rng = GlobalEntropy::<WyRand>::default();
+
+    let tick = sim_config.current_tick;
+
+    for _ in 0..100 {
+        commands.spawn((
+            SmallAsteroid::bundle(
+                tick,
+                &asteroid_assets,
+                Vec2::new(
+                    rng.gen_range((-3000.)..(10000.)),
+                    rng.gen_range((-3000.)..(3000.)),
+                ),
+                Vec2::new(
+                    bad_normal_distribution(&mut rng, 0., 10.),
+                    bad_normal_distribution(&mut rng, 0., 5.),
+                ),
+                bad_log_normal_distribution(&mut rng, 0., 0.5)
+                    .max(0.1)
+                    .min(20.),
+            ),
+            GameEntity,
+        ));
+    }
+}
+
+fn setup_death_screen(mut commands: Commands) {
+    commands.remove_resource::<PhysicsEnabled>();
+    commands.insert_resource(DeathScreenTimer(Timer::from_seconds(
+        2.0,
+        TimerMode::Once,
+    )));
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+            DeathScreenUI,
+        ))
+        .with_child((
+            Text::new("Game Over!\nRestarting..."),
+            Node {
+                margin: UiRect::all(Val::Px(8.0)),
+                ..default()
+            },
+        ));
+}
+
+fn update_time_display(
+    sim_config: Res<SimulationConfig>,
+    best_time: Res<BestTime>,
+    mut query: Query<&mut Text, With<TimeDisplayUI>>,
+    game_state: Res<State<GameState>>,
+) {
+    if *game_state.get() != GameState::Playing {
+        return;
+    }
+
+    let Ok(mut text) = query.get_single_mut() else {
+        return;
+    };
+
+    let current_time =
+        sim_config.current_tick as f32 / sim_config.ticks_per_second as f32;
+
+    text.0.clear();
+    use std::fmt::Write;
+    let _ = write!(&mut text.0, "Time: {:.1}s", current_time);
+    if let Some(best) = best_time.0 {
+        let _ = write!(&mut text.0, "\nBest: {:.1}s", best);
+    } else {
+        let _ = write!(&mut text.0, "\nBest: --");
+    }
+}
+
+fn reset_camera(mut query: Query<&mut Transform, With<Camera>>) {
+    if let Ok(mut transform) = query.get_single_mut() {
+        transform.translation = Vec3::new(0., 0., transform.translation.z);
+    }
+}
+
+fn setup_start_popup(mut commands: Commands) {
+    commands.insert_resource(StartPopupTimer(Timer::from_seconds(
+        10.0,
+        TimerMode::Once,
+    )));
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            StartPopupUI,
+            Interaction::default(),
+        ))
+        .with_child((
+            Text::new(
+                "Race through the asteroid field!\nReach the right side to \
+                 win!\n\nControls:\n• Drag with left mouse to thrust\n• Arrow \
+                 keys to move camera\n• Right mouse to pan camera\n• Space to \
+                 shoot\n• Keys 1-3 to switch weapons\n\nClick anywhere to \
+                 start",
+            ),
+            TextLayout::new_with_justify(JustifyText::Center),
+            TextColor(Color::WHITE),
+            TextFont {
+                font_size: 32.0,
+                ..default()
+            },
+        ));
+}
+
+fn handle_start_popup(
+    time: Res<Time>,
+    mut timer: ResMut<StartPopupTimer>,
+    mut commands: Commands,
+    query: Query<(Entity, &Interaction), With<StartPopupUI>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+) {
+    timer.0.tick(time.delta());
+
+    let should_transition =
+        timer.0.finished() || mouse.just_pressed(MouseButton::Left);
+
+    if should_transition {
+        for (entity, _) in query.iter() {
+            commands.entity(entity).despawn_recursive();
+        }
+        commands.remove_resource::<StartPopupTimer>();
+        next_state.set(GameState::Playing);
+    }
 }

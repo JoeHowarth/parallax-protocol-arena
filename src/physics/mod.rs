@@ -61,7 +61,11 @@ use std::{
     time::Duration,
 };
 
-use bevy::{ecs::schedule::ScheduleLabel, utils::warn};
+use bevy::{
+    ecs::schedule::ScheduleLabel,
+    time::common_conditions::on_timer,
+    utils::warn,
+};
 use collisions::{
     calculate_collision_result,
     calculate_impact_energy,
@@ -249,19 +253,17 @@ impl Default for SimulationConfig {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub enum PhysicsSchedule {
-    #[default]
-    FixedUpdate,
-    Update,
-}
-
 /// Plugin that sets up the physics simulation systems
 #[derive(Clone, Debug, Default)]
 pub struct PhysicsSimulationPlugin {
-    pub schedule: PhysicsSchedule,
     pub should_keep_alive: bool,
 }
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
+pub struct PhysicsSystemSet;
+
+#[derive(Resource)]
+pub struct PhysicsEnabled;
 
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
@@ -269,24 +271,24 @@ impl Plugin for PhysicsSimulationPlugin {
         app.add_event::<TimelineEventRequest>()
             .add_event::<TimelineEventRemovalRequest>()
             .insert_resource(SpatialIndex::default())
-            .add_systems(Update, (viz_colliders, process_timeline_events));
-
-        let systems = (
-            update_simulation_time,
-            compute_future_states,
-            sync_physics_state_transform,
-            despawn_not_alive.run_if(move || !should_keep_alive),
-        );
-        let systems = systems.chain();
-
-        match self.schedule {
-            PhysicsSchedule::FixedUpdate => {
-                app.add_systems(FixedUpdate, systems);
-            }
-            PhysicsSchedule::Update => {
-                app.add_systems(Update, systems);
-            }
-        }
+            .add_systems(Update, (viz_colliders, process_timeline_events))
+            .configure_sets(
+                FixedUpdate,
+                PhysicsSystemSet.run_if(
+                    |enabled: Option<Res<PhysicsEnabled>>| enabled.is_some(),
+                ),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    update_simulation_time,
+                    compute_future_states,
+                    sync_physics_state_transform,
+                    despawn_not_alive.run_if(move || !should_keep_alive),
+                )
+                    .chain()
+                    .in_set(PhysicsSystemSet),
+            );
     }
 }
 
@@ -456,7 +458,6 @@ mod tests {
             crate::ParallaxProtocolArenaPlugin {
                 config: default(),
                 physics: PhysicsSimulationPlugin {
-                    schedule: PhysicsSchedule::Update,
                     should_keep_alive: false,
                 },
                 client: None,

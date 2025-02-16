@@ -241,14 +241,14 @@ fn sync_preview_segments(
         .peekable();
 
     while let Some((&start_tick, start_pos)) = iter.next() {
-        let Some((end_tick, end_pos)) = iter.peek().copied() else {
+        let Some((&end_tick, end_pos)) = iter.peek().copied() else {
             break;
         };
 
         let segment = TrajectorySegment {
             craft_entity: preview.entity,
             start_tick,
-            end_tick: *end_tick,
+            end_tick,
             start_pos,
             end_pos,
             is_preview: true,

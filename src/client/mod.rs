@@ -18,6 +18,12 @@ pub struct ClientPlugin {
     pub trajectory: TrajectoryPlugin,
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
+pub struct GraphicsSystemSet;
+
+#[derive(Resource)]
+pub struct GraphicsEnabled;
+
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
@@ -26,7 +32,17 @@ impl Plugin for ClientPlugin {
             self.trajectory,
         ))
         .insert_resource(ScreenLenToWorld(1.))
-        .add_systems(PreUpdate, (calc_screen_length_to_world.pipe(eat_error),));
+        .add_systems(
+            PreUpdate,
+            (calc_screen_length_to_world.pipe(eat_error),)
+                .in_set(GraphicsSystemSet),
+        )
+        .configure_sets(
+            PreUpdate,
+            GraphicsSystemSet.run_if(
+                |enabled: Option<Res<GraphicsEnabled>>| enabled.is_some(),
+            ),
+        );
     }
 }
 
