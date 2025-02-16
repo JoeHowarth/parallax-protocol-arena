@@ -58,6 +58,7 @@ pub mod timeline;
 
 use std::{
     ops::{RangeBounds, RangeInclusive},
+    sync::Arc,
     time::Duration,
 };
 
@@ -136,6 +137,7 @@ impl PhysicsBundle {
                 current_thrust: 0.,
                 max_thrust,
                 alive: true,
+                elastic_beam: None,
             },
             dim,
         )
@@ -177,6 +179,9 @@ pub struct PhysicsState {
     /// Whether entity still exists or has been destroyed
     /// False indicates entity should be despawned
     pub alive: bool,
+
+    /// Optional elastic beam connection to another entity
+    pub elastic_beam: Option<(Entity, Arc<ElasticBeamInfo>)>,
 }
 
 #[derive(Event, Debug, Reflect)]
@@ -218,6 +223,52 @@ pub enum ControlInput {
     /// Simultaneously set thrust (-1.0 to 1.0) and rotation (radians)
     /// Useful for immediate course corrections
     SetThrustAndRotation(f32, f32),
+
+    /// Connect an elastic beam to another entity
+    ElasticBeamConnect(Entity),
+
+    /// Disconnect an elastic beam from another entity
+    ElasticBeamDisconnect(Entity),
+}
+
+/// Parameters defining an elastic beam connection between entities
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct ElasticBeamInfo {
+    /// Natural length of the beam when no forces are applied
+    pub neutral_length: f32,
+    /// Spring constant (higher = stiffer beam)
+    pub stiffness: f32,
+    /// Maximum length before beam breaks
+    pub max_length: f32,
+}
+
+impl ElasticBeamInfo {
+    /// Calculate potential energy stored in the beam given both connected
+    /// positions Uses spring equation: PE = 1/2 * k * x^2
+    /// where k is stiffness and x is displacement from neutral length
+    pub fn potential_energy(&self, pos_a: Vec2, pos_b: Vec2) -> f32 {
+        let displacement = (pos_b - pos_a).length() - self.neutral_length;
+        0.5 * self.stiffness * displacement * displacement
+    }
+
+    /// Calculate force vector exerted by the beam at pos_a due to pos_b
+    /// Uses Hooke's law: F = -k * x
+    /// Returns force vector to be applied to pos_a (opposite force applies to
+    /// pos_b)
+    pub fn force_on_a(&self, pos_a: Vec2, pos_b: Vec2) -> Vec2 {
+        let displacement_vec = pos_b - pos_a;
+        let current_length = displacement_vec.length();
+
+        if current_length == 0.0 {
+            return Vec2::ZERO;
+        }
+
+        let displacement = current_length - self.neutral_length;
+        let direction = displacement_vec / current_length;
+
+        // Force points along the beam axis
+        direction * (self.stiffness * displacement)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Reflect)]
@@ -257,6 +308,7 @@ impl Default for SimulationConfig {
 #[derive(Clone, Debug, Default)]
 pub struct PhysicsSimulationPlugin {
     pub should_keep_alive: bool,
+    pub is_test: bool,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
@@ -268,27 +320,31 @@ pub struct PhysicsEnabled;
 impl Plugin for PhysicsSimulationPlugin {
     fn build(&self, app: &mut App) {
         let should_keep_alive = self.should_keep_alive;
+        let systems = (
+            update_simulation_time,
+            compute_future_states,
+            sync_physics_state_transform,
+            despawn_not_alive.run_if(move || !should_keep_alive),
+        )
+            .chain()
+            .in_set(PhysicsSystemSet);
+
         app.add_event::<TimelineEventRequest>()
             .add_event::<TimelineEventRemovalRequest>()
             .insert_resource(SpatialIndex::default())
-            .add_systems(Update, (viz_colliders, process_timeline_events))
-            .configure_sets(
+            .add_systems(Update, (viz_colliders, process_timeline_events));
+
+        if !self.is_test {
+            app.add_systems(FixedUpdate, systems).configure_sets(
                 FixedUpdate,
                 PhysicsSystemSet.run_if(
                     |enabled: Option<Res<PhysicsEnabled>>| enabled.is_some(),
                 ),
-            )
-            .add_systems(
-                FixedUpdate,
-                (
-                    update_simulation_time,
-                    compute_future_states,
-                    sync_physics_state_transform,
-                    despawn_not_alive.run_if(move || !should_keep_alive),
-                )
-                    .chain()
-                    .in_set(PhysicsSystemSet),
             );
+        } else {
+            app.add_systems(Update, systems)
+                .configure_sets(Update, PhysicsSystemSet);
+        }
     }
 }
 
@@ -356,27 +412,57 @@ impl PhysicsState {
         if !self.alive {
             return PhysicsState::default();
         }
-        // TODO: replace this with rk4 integration method to reduce errors
+
+        // Calculate thrust force
         let thrust_direction = Vec2::from_angle(self.rotation);
         let thrust_force =
             thrust_direction * (self.current_thrust * self.max_thrust);
+
+        // Start with thrust force, beam forces will be added separately
         let acceleration = thrust_force / self.mass;
 
         PhysicsState {
             pos: self.pos + self.vel * delta_seconds,
             vel: self.vel + acceleration * delta_seconds,
             rotation: self.rotation + self.ang_vel * delta_seconds,
-            // Assuming no torque for now
             ang_vel: self.ang_vel,
             mass: self.mass,
             current_thrust: self.current_thrust,
             max_thrust: self.max_thrust,
             alive: self.alive,
+            elastic_beam: self.elastic_beam.clone(),
         }
     }
 
+    /// Apply elastic beam forces given the other entity's position
+    /// Returns updated state and whether beam should break
+    fn integrate_beam(
+        &self,
+        other_pos: Vec2,
+        delta_seconds: f32,
+    ) -> (Self, bool) {
+        let mut state = self.clone();
+        let should_break = if let Some((_, beam)) = &self.elastic_beam {
+            let current_length = (other_pos - self.pos).length();
+
+            if current_length > beam.max_length {
+                state.elastic_beam = None;
+                true
+            } else {
+                // Calculate and apply beam force
+                let beam_force = beam.force_on_a(self.pos, other_pos);
+                let beam_acceleration = beam_force / self.mass;
+                state.vel = state.vel + beam_acceleration * delta_seconds;
+                false
+            }
+        } else {
+            false
+        };
+
+        (state, should_break)
+    }
+
     fn apply_input_event(&mut self, event: Option<&ControlInput>) {
-        use TimelineEvent::{Collision, Control};
         let Some(event) = event else {
             return;
         };
@@ -395,6 +481,22 @@ impl PhysicsState {
             }
             ControlInput::SetAngVel(ang_vel) => {
                 self.ang_vel = *ang_vel;
+            }
+            ControlInput::ElasticBeamConnect(entity) => {
+                let beam = ElasticBeamInfo {
+                    neutral_length: 10.0,
+                    stiffness: 2.0,
+                    max_length: 15.0,
+                };
+                self.elastic_beam = Some((*entity, Arc::new(beam)));
+            }
+            ControlInput::ElasticBeamDisconnect(entity) => {
+                // Only disconnect if connected to specified entity
+                if let Some((connected_entity, _)) = &self.elastic_beam {
+                    if connected_entity == entity {
+                        self.elastic_beam = None;
+                    }
+                }
             }
         }
     }
@@ -459,10 +561,12 @@ mod tests {
                 config: default(),
                 physics: PhysicsSimulationPlugin {
                     should_keep_alive: false,
+                    is_test: true,
                 },
                 client: None,
             },
         );
+        app.insert_resource(PhysicsEnabled);
         app
     }
 
@@ -476,6 +580,7 @@ mod tests {
             current_thrust: 0.0,
             max_thrust: 100.0,
             alive: true,
+            elastic_beam: None,
         }
     }
 
@@ -493,6 +598,7 @@ mod tests {
             current_thrust: 0.0,
             max_thrust: 100.0,
             alive: true,
+            elastic_beam: None,
         };
 
         let next_state = state.integrate(delta);
@@ -516,6 +622,7 @@ mod tests {
             current_thrust: 1.0, // Full thrust
             max_thrust: 100.0,   // 100N max thrust
             alive: true,
+            elastic_beam: None,
         };
 
         let next_state = state.integrate(delta);
@@ -540,6 +647,7 @@ mod tests {
             current_thrust: 1.0,
             max_thrust: 100.0,
             alive: true,
+            elastic_beam: None,
         };
 
         let next_state = state.integrate(delta);
@@ -575,7 +683,7 @@ mod tests {
             .spawn(PhysicsBundle::new_with_events(
                 state,
                 Vec2::splat(2.),
-                0,
+                1,
                 [(30, ControlInput::SetThrust(1.0))],
             ))
             .id();
@@ -618,5 +726,94 @@ mod tests {
         let next_state = state.integrate(1.0 / 60.0);
         assert!(next_state.vel.x.abs() < f32::EPSILON);
         assert!(next_state.vel.y > 0.0);
+    }
+
+    #[test]
+    fn test_elastic_beam_potential_energy() {
+        let beam = ElasticBeamInfo {
+            neutral_length: 10.0,
+            stiffness: 2.0,
+            max_length: 15.0,
+        };
+
+        // Test at neutral length (no potential energy)
+        let pos_a = Vec2::ZERO;
+        let pos_b = Vec2::new(10.0, 0.0);
+        assert_approx_eq!(beam.potential_energy(pos_a, pos_b), 0.0);
+
+        // Test when stretched
+        let pos_stretched = Vec2::new(15.0, 0.0);
+        assert_approx_eq!(beam.potential_energy(pos_a, pos_stretched), 25.0);
+
+        // Test at diagonal position
+        let pos_diagonal = Vec2::new(10.0, 10.0);
+        let displacement = 200.0_f32.sqrt() - 10.0;
+        let expected_pe = 0.5 * 2.0 * displacement * displacement;
+        assert_approx_eq!(
+            beam.potential_energy(pos_a, pos_diagonal),
+            expected_pe
+        );
+    }
+
+    #[test]
+    fn test_elastic_beam_force() {
+        let beam = ElasticBeamInfo {
+            neutral_length: 10.0,
+            stiffness: 2.0,
+            max_length: 15.0,
+        };
+
+        let pos_a = Vec2::ZERO;
+
+        // Test at neutral length (no force)
+        let pos_neutral = Vec2::new(10.0, 0.0);
+        let force_neutral = beam.force_on_a(pos_a, pos_neutral);
+        assert_approx_eq!(force_neutral.x, 0.0);
+        assert_approx_eq!(force_neutral.y, 0.0);
+
+        // Test when stretched along x-axis
+        let pos_stretched = Vec2::new(15.0, 0.0);
+        let force_stretched = beam.force_on_a(pos_a, pos_stretched);
+        assert_approx_eq!(force_stretched.x, 10.0); // Force is now positive (pulling)
+        assert_approx_eq!(force_stretched.y, 0.0);
+
+        // Test at diagonal position
+        let pos_diagonal = Vec2::new(10.0, 10.0);
+        let force_diagonal = beam.force_on_a(pos_a, pos_diagonal);
+        let displacement = 200.0_f32.sqrt() - 10.0;
+        let force_magnitude = 2.0 * displacement;
+        let expected_component = force_magnitude / 2.0_f32.sqrt();
+        assert_approx_eq!(force_diagonal.x, expected_component);
+        assert_approx_eq!(force_diagonal.y, expected_component);
+    }
+
+    #[test]
+    fn test_elastic_beam_physics_integration() {
+        let mut state = create_test_physics_state();
+
+        // Create beam pulling to the right
+        let beam = ElasticBeamInfo {
+            neutral_length: 5.0,
+            stiffness: 2.0,
+            max_length: 15.0,
+        };
+        state.elastic_beam = Some((Entity::from_raw(1), Arc::new(beam)));
+
+        // Test normal integration
+        let other_pos = Vec2::new(10.0, 0.0);
+        let delta = 1.0 / 60.0;
+        let (next_state, should_break) = state.integrate_beam(other_pos, delta);
+
+        assert!(!should_break);
+        assert!(next_state.vel.x > 0.0);
+        assert_approx_eq!(next_state.vel.y, 0.0);
+
+        // Test beam breaking
+        let far_pos = Vec2::new(20.0, 0.0);
+        let (next_far_state, should_break) =
+            state.integrate_beam(far_pos, delta);
+
+        assert!(should_break);
+        assert!(next_far_state.elastic_beam.is_none());
     }
 }

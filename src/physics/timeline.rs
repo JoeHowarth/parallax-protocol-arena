@@ -66,9 +66,8 @@ pub fn compute_future_states(
     mut query: Query<(Entity, &Collider, &mut Timeline)>,
     mut invalid_set: Local<EntityHashMap<u64>>,
 ) {
-    eprintln!("\n\n--------");
-
     if query.is_empty() {
+        eprintln!("No entities match compute future states");
         warn!("No entities match compute future states");
         return;
     }
@@ -81,9 +80,8 @@ pub fn compute_future_states(
     invalid_set.clear();
 
     for (entity, _, mut timeline) in query.iter_mut() {
-        let last_computed_tick = timeline.last_computed_tick;
         last_updated_sets
-            .entry(last_computed_tick)
+            .entry(timeline.last_computed_tick)
             .or_default()
             .insert(entity);
         min_tick = min_tick.min(timeline.last_computed_tick);
@@ -582,7 +580,7 @@ mod tests {
                 vel: (-90., 0.).into(),
                 current_thrust: 1.0,
                 rotation: PI,
-                ..a_st
+                ..a_st.clone()
             }
         );
         states_eq!(
@@ -592,7 +590,7 @@ mod tests {
                 vel: (-190., 0.).into(),
                 current_thrust: 1.0,
                 rotation: PI,
-                ..a_st
+                ..a_st.clone()
             }
         );
         states_eq!(
@@ -602,7 +600,7 @@ mod tests {
                 vel: (-190., 100.).into(),
                 current_thrust: 1.0,
                 rotation: PI / 2.,
-                ..a_st
+                ..a_st.clone()
             }
         );
 

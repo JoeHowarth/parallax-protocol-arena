@@ -429,6 +429,8 @@ impl MarkerVisual {
                 relative_rot: new_rot - event.rot,
                 color: css::LIGHT_GREEN,
             },
+            ElasticBeamConnect(entity) => todo!(),
+            ElasticBeamDisconnect(entity) => todo!(),
             // Collision(collision) => Cross { color: css::RED },
         }
     }

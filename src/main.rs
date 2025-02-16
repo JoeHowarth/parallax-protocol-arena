@@ -255,6 +255,7 @@ pub fn ship_bundle(
                 current_thrust: 0.,
                 max_thrust: 50.,
                 alive: true,
+                elastic_beam: None,
             },
             Vec2::new(px, px),
             tick,

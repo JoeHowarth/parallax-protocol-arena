@@ -56,6 +56,7 @@ impl TestStateBuilder {
     pub fn new() -> Self {
         Self {
             state: PhysicsState {
+                elastic_beam: None,
                 pos: Vec2::ZERO,
                 vel: Vec2::ZERO,
                 rotation: 0.0,
